@@ -445,8 +445,10 @@ differing in what (if anything) they do to a packet before delivering it to the 
 - **`doca_flow_mac`** — rewrites the dst MAC on every packet to the receiver's real MAC, no ECN.
   Since the wire already carries that same MAC, this rewrite is currently an identity op and
   runs at full line rate — all three programs currently perform identically.
-- **`doca_flow_ecn`** — sets ECN CE, with the 3 marking modes described under
-  [Tutorial exercises](#tutorial-exercises).
+- **`doca_flow_ecn`** — sets ECN CE on a configurable fraction of IPv4 packets (`--percent`,
+  `[0, 100]`, fractional values allowed). `--percent 100` marks everything, `--percent 0` marks
+  nothing (both exact); anything in between samples via a HW random field, rounded down to the
+  nearest power-of-two fraction. Default: 100.
 
 Initial setup of the build directory:
 
