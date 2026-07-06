@@ -275,6 +275,26 @@ The two physical ports **p0 and p1 are wired directly to each other with a singl
 cable** (loopback). Everything below therefore happens inside one DPU: packets that leave p1
 physically re-enter at p0.
 
+### OVS bridges — the default forwarding path
+
+Each PF sits in its own pre-existing OVS bridge, an ASAP²-hardware-offloaded L2 learning bridge
+that provides the "default" forwarding path referenced throughout this README (this is what
+`fdb_def_rule_en=1` keeps active on whichever PF isn't under a `doca-flow` program's exclusive
+control):
+
+| Bridge | Ports | Covers |
+|---|---|---|
+| `ovsbr1` | `p0`, `pf0hpf`, `en3f0pf0sf0` | PF0 — fully bypassed while a `doca-flow` program runs (its root pipe takes absolute hardware priority; verified via zero OVS packet/flow activity on `ovsbr1` during a live test that was actively losing packets one layer down) |
+| `ovsbr2` | `p1`, `pf1hpf`, `en3f1pf1sf0` | PF1 — always active; this is the actual mechanism that gets the sender's traffic onto the wire, since no `doca-flow` program ever touches PF1 |
+
+`en3f0pf0sf0`/`en3f1pf1sf0` are the SFs' host-side **representors**: distinct, always-present
+netdevs on the switch side (not the same object as `enp3s0f0s0`/`enp3s0f1s0` below, which are the
+SFs' own consumer-side netdevs).
+
+[`setup_roce_loopback.sh`](setup_roce_loopback.sh) creates these bridges and ports idempotently
+(`ovs-vsctl --may-exist ...`), so it's safe to re-run and will re-establish this layout even from
+a box where OVS was never configured.
+
 ### Scalable Functions (SFs) — the RoCE endpoints
 
 Two SFs, one per PF, carry the actual RoCE traffic. Each SF's netdev is moved into its own
@@ -286,34 +306,33 @@ instead of being delivered locally by the host kernel:
 | `mlx5_core.sf.2` (on PF0) | `mlx5_2` | `enp3s0f0s0` | `ns0` | `10.0.0.1` | `02:c9:c8:ff:a6:24` | **Receiver / server (NP)** |
 | `mlx5_core.sf.3` (on PF1) | `mlx5_3` | `enp3s0f1s0` | `ns1` | `10.0.0.2` | `02:26:3d:d7:e0:4b` | **Sender / client (RP)** |
 
-In the *host* (default namespace) the same SF netdevs appear under their eSwitch names
-`en3f0pf0sf0` (PF0 SF) and `en3f1pf1sf0` (PF1 SF); moving them into `ns0`/`ns1` renames them to
-`enp3s0f0s0`/`enp3s0f1s0`.
-
-Run [`setup_roce_loopback.sh`](setup_roce_loopback.sh) to build this whole layout: it reserves
-hugepages, creates `ns0`/`ns1`, moves each SF's RDMA device and netdev into its namespace, assigns
-the IPs, and pins the sender's neighbor for the receiver to an **unknown MAC**
-(`12:34:56:78:9a:bc`, *not* `mlx5_2`'s real MAC — see below). **None of this survives a reboot or
-power-cycle, so re-run it after every boot:**
+Run [`setup_roce_loopback.sh`](setup_roce_loopback.sh) to build this whole layout: it ensures the
+OVS bridges above exist, reserves hugepages, creates `ns0`/`ns1`, moves each SF's RDMA device and
+netdev into its namespace, assigns the IPs, and pins the sender's neighbor for the receiver
+directly to `mlx5_2`'s real MAC (read dynamically from `enp3s0f0s0`, not hardcoded). **None of
+this survives a reboot or power-cycle, so re-run it after every boot:**
 
 ```bash
 ./setup_roce_loopback.sh
 ```
 
-> **Why namespaces + an unknown-MAC neighbor entry.**
-> - **Namespaces** stop the *Linux kernel* from delivering `10.0.0.1 ↔ 10.0.0.2` locally — both IPs
->   sit on this one host, so without isolation the kernel short-circuits them and RoCE never touches
->   the wire. Each SF in its own netns forces the traffic out.
-> - The packet then crosses the DAC because **p0 and p1 are independent switchdev eSwitches** — PF1
->   has no vport for `mlx5_2`, so its address is unknown-unicast on PF1 and egresses p1 → DAC → p0
->   *regardless of the destination MAC*. (There is no cross-PF eSwitch shortcut to defeat.)
-> - The neighbor entry uses an **unknown MAC** so that on PF0 the frame is handled **only** by the
->   DOCA Flow HWS mark pipe. If it carried `mlx5_2`'s real MAC, PF0's retained kernel default FDB
->   (`fdb_def_rule_en=1`) *also* matches it and can deliver it **unmarked** whenever the HWS pipeline
->   is not active — verified: with the marker stopped, real-MAC traffic ran at 92 Gb/s with **zero**
->   CE marks. An unknown MAC has no kernel-FDB entry, so the mark pipe is the only path that can
->   deliver it. DOCA Flow then **rewrites the dst MAC to `RECEIVER_MAC`** (`doca_flow_ecn.c`) so the
->   receiver's ibverbs QP steering rule (which matches on dst MAC) still fires.
+> **Why namespaces.** They stop the *Linux kernel* from delivering `10.0.0.1 ↔ 10.0.0.2` locally
+> — both IPs sit on this one host, so without isolation the kernel short-circuits them and RoCE
+> never touches the wire. Each SF in its own netns forces the traffic out. The packet then
+> crosses the DAC because **p0 and p1 are independent switchdev eSwitches** — PF1 has no vport
+> for `mlx5_2`, so `ovsbr2` (see above) floods it as unknown-unicast out p1 → DAC → p0
+> *regardless of the destination MAC*. (There is no cross-PF eSwitch shortcut to defeat.)
+>
+> **Why the real MAC, not a fake one.** An earlier version of this tutorial pinned the sender's
+> neighbor to a made-up, unknown MAC, and had DOCA Flow rewrite it to the real MAC before
+> delivery — reasoning that this way, PF0 traffic could *only* ever be handled by the DOCA Flow
+> pipe (an unknown MAC has no entry in `ovsbr1`'s FDB, so nothing but our own root pipe could
+> deliver it). That rewrite turned out to cost ~70x throughput (changing the dst MAC's value
+> specifically triggers heavy packet loss on this NIC/firmware — see the `doca-flow/` programs
+> below), so this tutorial now uses the real MAC directly and never rewrites it. The tradeoff:
+> if no `doca-flow` program is running, PF0 traffic silently falls back to `ovsbr1` and reaches
+> the receiver **unmarked** instead of erroring loudly — worth it for a ~70x speedup, but worth
+> knowing if a marking exercise seems to have no effect: check something is actually running.
 
 ### Firmware NV-config (PCC prerequisite)
 
@@ -411,12 +430,23 @@ The build and run steps below assume:
   tools needed to build both parts **natively on the Arm** — no DOCA devel container is required.
 - **`perftest` (`ib_write_bw`) and `mlxconfig`/`mlxfwreset` (MFT)** are installed for driving RoCE
   traffic and for the firmware NV-config step above.
-- Hugepages are reserved (DPDK/DPA programs — `doca-flow-ecn` and `doca_pcc` — need them). This is
+- Hugepages are reserved (DPDK/DPA programs — the `doca-flow` programs and `doca_pcc` — need them). This is
   done for you by [`setup_roce_loopback.sh`](setup_roce_loopback.sh)
   (`dpdk-hugepages.py --reserve 4G`); it does not persist across reboots, so re-run
   `setup_roce_loopback.sh` after every boot/power-cycle.
 
-# Building the DOCA Flow program
+# Building the DOCA Flow programs
+
+`doca-flow/` builds three programs, sharing the same PORT_DEMUX/eSwitch-forwarding scaffold but
+differing in what (if anything) they do to a packet before delivering it to the receiver's SF:
+
+- **`doca_flow_nop`** — forwards packets untouched, no header-modify action at all. Performance
+  control group, and the base file to build a pipeline on top of.
+- **`doca_flow_mac`** — rewrites the dst MAC on every packet to the receiver's real MAC, no ECN.
+  Since the wire already carries that same MAC, this rewrite is currently an identity op and
+  runs at full line rate — all three programs currently perform identically.
+- **`doca_flow_ecn`** — sets ECN CE, with the 3 marking modes described under
+  [Tutorial exercises](#tutorial-exercises).
 
 Initial setup of the build directory:
 
@@ -424,17 +454,19 @@ Initial setup of the build directory:
 $ meson setup build
 ```
 
-Building:
+Building (all three programs):
 
 ```
 $ cd build
 $ ninja
 ```
 
-Running:
+Running (pick one):
 
 ```
-$ sudo ./doca-flow-ecn/doca_flow_ecn
+$ sudo ./doca-flow/doca_flow_nop
+$ sudo ./doca-flow/doca_flow_mac
+$ sudo ./doca-flow/doca_flow_ecn
 ```
 
 # Tutorial exercises
@@ -448,23 +480,13 @@ The example will be tested by running both a server and a client on the ARM core
 
 ## End-to-end data path (both parts together)
 
-```
-  Sender / client (RP)                                         Receiver / server (NP)
-  ns1 · enp3s0f1s0 · mlx5_3                                     ns0 · enp3s0f0s0 · mlx5_2
-  10.0.0.2                                                      10.0.0.1
-        │                                                             ▲
-        │ RoCE WRITE                                                  │ CE-marked packets →
-        ▼                                                             │ receiver HW emits CNP
-   p1 uplink ──[ 100G DAC cable ]──▶ p0 uplink ──▶ PF0 eSwitch (FDB) ─┘
-   (mlx5_1)                          (mlx5_0)      DOCA Flow ECN: set CE on all IPv4,
-        ▲                                          rewrite dst MAC, deliver to mlx5_2
-        │ CNP returns                                         │
-        └──────────[ DAC cable ]◀── p0 ◀── PF0 FDB ◀──────────┘  (mlx5_2 egress → p0 wire)
-        │
-   RP PCC controller on mlx5_1 (PF1) reacts to each CNP → cuts the QP's rate
-```
+![End-to-end data path: sender (ns1/mlx5_3) sends a RoCE WRITE out p1, across the 100G DAC cable to p0, through PF0's eSwitch where DOCA Flow ECN marks CE and delivers to mlx5_2; the receiver emits a CNP that returns the same way, and the RP PCC controller on mlx5_1 reacts by cutting the sender QP's rate.](docs/end-to-end-data-path.png)
 
-- **`doca-flow-ecn` on PF0 (`mlx5_0`)** replaces the physical switch's WRED/ECN marking that the
+(source: [`docs/end-to-end-data-path.dot`](docs/end-to-end-data-path.dot), rendered with
+`dot -Tpng docs/end-to-end-data-path.dot -o docs/end-to-end-data-path.png`; regenerate after
+editing the `.dot` file)
+
+- **`doca_flow_ecn` on PF0 (`mlx5_0`)** replaces the physical switch's WRED/ECN marking that the
   original 2×BlueField-3 PCC testbed relied on. It marks **CE on every IPv4 packet** arriving from
   the wire (unconditional, not ECT→CE — so any RoCE generator drives the loop).
 - **The receiver (`mlx5_2`) generates CNPs** in hardware when it sees CE-marked packets — standard
@@ -505,7 +527,7 @@ The **device mapping is converged to our single-DPU setup** as follows:
 
 | Step | Original 2×BF3 testbed | **Our single-DPU DAC loopback** |
 |---|---|---|
-| ECN marking | SONiC switch WRED on DSCP26→Q3 | `doca-flow-ecn` on PF0 (`mlx5_0`) |
+| ECN marking | SONiC switch WRED on DSCP26→Q3 | `doca_flow_ecn` on PF0 (`mlx5_0`) |
 | RP PCC device | `mlx5_1` on the sender host | `mlx5_1` (PF1 uplink — sender is p1/ns1) |
 | NP PCC device | `mlx5_1` on the receiver host | none (receiver HW CNP is enough) |
 | Sender RoCE | `mlx5_3` on sender host | `mlx5_3` in `ns1` (client) |
@@ -515,7 +537,7 @@ Combined run (start Flow first, then the RP controller, then drive traffic):
 
 ```bash
 # 1. ECN marker (PF0) — leave running:
-sudo ./build/doca-flow-ecn/doca_flow_ecn
+sudo ./build/doca-flow/doca_flow_ecn
 
 # 2. RP PCC controller on PF1 — FOREGROUND, stays Active for the whole window:
 sudo timeout 40 stdbuf -oL ./doca-pcc-ecn/app/build/pcc/doca_pcc -d mlx5_1 -l 50 > rp.log 2>&1 &
@@ -530,8 +552,8 @@ grep PURE_ECN rp.log            # rate walking down as CNPs arrive => the loop i
 sudo pkill -INT -x doca_pcc     # stop gracefully (never SIGKILL: leaves a ghost DPA context)
 ```
 
-> **If no CNPs arrive** (`grep PURE_ECN rp.log` stays empty while `doca-flow-ecn` reports rising CE
+> **If no CNPs arrive** (`grep PURE_ECN rp.log` stays empty while `doca_flow_ecn` reports rising CE
 > counts): the receiver's HW **CNP generation** may be priority-scoped. Add a traffic class to steer
 > traffic onto an ECN-enabled priority — e.g. `--tclass=104` (DSCP 26 → TC3) on both `ib_write_bw`
-> ends — even though `doca-flow-ecn` already marks CE regardless of queue.
+> ends — even though `doca_flow_ecn` already marks CE regardless of queue.
 

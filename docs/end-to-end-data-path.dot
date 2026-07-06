@@ -1,0 +1,39 @@
+digraph end_to_end_data_path {
+  rankdir=LR;
+  fontname="Helvetica";
+  labelloc="t";
+  fontsize=16;
+  label="End-to-end data path (DOCA Flow + DOCA PCC together)";
+  nodesep=0.6;
+  ranksep=0.7;
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
+  edge [fontname="Helvetica", fontsize=10];
+
+  subgraph cluster_sender {
+    label="Sender / client (RP)";
+    style="rounded";
+    color="#888888";
+    sender [label="ns1 · enp3s0f1s0 · mlx5_3\n10.0.0.2", fillcolor="#dbe9ff"];
+  }
+
+  p1 [label="p1 uplink (mlx5_1)\nRP PCC controller runs here"];
+  p0 [label="p0 uplink (mlx5_0)"];
+
+  fdb [label="PF0 eSwitch (FDB)\nDOCA Flow ECN:\nset CE on all IPv4,\ndeliver to mlx5_2", fillcolor="#ffe9b3"];
+
+  subgraph cluster_receiver {
+    label="Receiver / server (NP)";
+    style="rounded";
+    color="#888888";
+    receiver [label="ns0 · enp3s0f0s0 · mlx5_2\n10.0.0.1", fillcolor="#dbe9ff"];
+  }
+
+  sender -> p1 [label="RoCE WRITE"];
+  p1 -> p0 [label="100G DAC cable", color="#1a6fbf", fontcolor="#1a6fbf", penwidth=2];
+  p0 -> fdb;
+  fdb -> receiver [label="deliver to mlx5_2"];
+
+  receiver -> p0 [label="receiver HW emits CNP\non CE-marked packets", color="#c0392b", fontcolor="#c0392b", constraint=false];
+  p0 -> p1 [label="DAC cable\n(CNP returns)", color="#c0392b", fontcolor="#c0392b", penwidth=2, constraint=false];
+  p1 -> sender [label="cuts the QP's rate", style=dashed, color="#555555", fontcolor="#555555", constraint=false];
+}

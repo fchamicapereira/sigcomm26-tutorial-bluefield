@@ -39,7 +39,7 @@ base_app_dependencies += dependency_doca_common
 base_app_inc_dirs = []
 
 app_list = [
-	'doca-flow-ecn',
+	'doca-flow',
 ]
 
 fs = import('fs')
