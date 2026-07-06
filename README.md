@@ -290,11 +290,13 @@ In the *host* (default namespace) the same SF netdevs appear under their eSwitch
 `en3f0pf0sf0` (PF0 SF) and `en3f1pf1sf0` (PF1 SF); moving them into `ns0`/`ns1` renames them to
 `enp3s0f0s0`/`enp3s0f1s0`.
 
-Point the **sender's** neighbor entry for the receiver at an **unknown MAC** (see below for why —
-*not* `mlx5_2`'s real MAC):
+Run [`setup.sh`](setup.sh) to build this whole layout: it reserves hugepages, creates `ns0`/`ns1`,
+moves each SF's RDMA device and netdev into its namespace, assigns the IPs, and pins the sender's
+neighbor for the receiver to an **unknown MAC** (`12:34:56:78:9a:bc`, *not* `mlx5_2`'s real MAC — see
+below). **None of this survives a reboot or power-cycle, so re-run it after every boot:**
 
 ```bash
-sudo ip netns exec ns1 ip neigh replace 10.0.0.1 lladdr 12:34:56:78:9a:bc dev enp3s0f1s0 nud permanent
+./setup.sh
 ```
 
 > **Why namespaces + an unknown-MAC neighbor entry.**
@@ -314,14 +316,26 @@ sudo ip netns exec ns1 ip neigh replace 10.0.0.1 lladdr 12:34:56:78:9a:bc dev en
 
 ### Firmware NV-config (PCC prerequisite)
 
-DOCA PCC (Part IV) requires the NV-config knob **`USER_PROGRAMMABLE_CC=1`** (default `0`).
-`REAL_TIME_CLOCK_ENABLE` is **not** needed (the RTT loop uses the free-running clock). On a fresh
-DPU — or after a factory reset — enable it as follows.
+DOCA PCC (Part IV) needs two NV-config knobs:
 
-1. **Stage the knob** (writes NV-config; can be done from the Arm):
+- **`USER_PROGRAMMABLE_CC=1`** (default `0`) — enables the programmable-CC / PCC object. Without it
+  `doca_pcc` fails with `PCC CONFIG object is not supported on this device`.
+- **`DPA_AUTHENTICATION=0`** — this is the *factory default*, but a DPU may ship hardened to `1`. With
+  it `1`, the firmware only runs **signed** DPA images and rejects a locally `dpacc`-built one, so
+  *both* our controller **and the stock DOCA `doca_pcc`** fail at startup with
+  `flexio_create_prm_process ... Failed to create PRM process` (syndrome `0x8f333`). We disable it
+  because tutorial participants recompile the DPA algo on every tweak; authenticating each build is a
+  heavyweight, beta, static-link-only signing chain (generate an OEM root CA → install a signed cert
+  container with `mlxdpa`/`flint` → sign the ELF), so it's impractical here — see NVIDIA's
+  [DPA Development](https://networking-docs.nvidia.com/doca/sdk/dpa-development) guide if you do need
+  signed images.
+
+`REAL_TIME_CLOCK_ENABLE` is **not** needed (the RTT loop uses the free-running clock).
+
+1. **Stage both knobs** (writes NV-config; can be done from the Arm):
 
    ```bash
-   sudo mlxconfig -y -d /dev/mst/mt41692_pciconf0 set USER_PROGRAMMABLE_CC=1
+   sudo mlxconfig -y -d /dev/mst/mt41692_pciconf0 set USER_PROGRAMMABLE_CC=1 DPA_AUTHENTICATION=0
    ```
 
 2. **Apply it by fully power-cycling the DPU — a reboot is NOT enough.** The staged value only
@@ -348,18 +362,19 @@ DPU — or after a factory reset — enable it as follows.
    > (`mt41692_pciconf0` and `mt41692_pciconf0.1`) concurrently. A clean power-cycle sidesteps all of
    > it.
 
-3. **Verify the *Current* (live) value with `-e`** — plain `q` prints only the Next Boot column and
-   will read `True(1)` even before the reset has taken effect:
+3. **Verify the *Current* (live) values with `-e`** — plain `q` prints only the Next Boot column and
+   will read the new value even before the power-cycle has taken effect:
 
    ```bash
-   sudo mlxconfig -d /dev/mst/mt41692_pciconf0 -e q | grep -E 'USER_PROGRAMMABLE_CC|REAL_TIME_CLOCK_ENABLE'
+   sudo mlxconfig -d /dev/mst/mt41692_pciconf0 -e q | grep -E 'USER_PROGRAMMABLE_CC|DPA_AUTHENTICATION'
    #                                          Default      Current      Next Boot
    #   USER_PROGRAMMABLE_CC                   False(0)     True(1)      True(1)      <- Current must be 1
-   #   REAL_TIME_CLOCK_ENABLE                 False(0)     False(0)     False(0)
+   #   DPA_AUTHENTICATION                     False(0)     False(0)     False(0)     <- Current must be 0
    ```
 
-   `doca_pcc -d mlx5_1` will refuse to start (`PCC CONFIG object is not supported on this device`)
-   until **Current** reads `True(1)`.
+   Until **Current** reads `USER_PROGRAMMABLE_CC=1` *and* `DPA_AUTHENTICATION=0`, `doca_pcc` refuses
+   to start — with `PCC CONFIG object is not supported on this device` (knob 1) or
+   `Failed to create PRM process` / syndrome `0x8f333` (knob 2).
 
 # Testing the setup
 
@@ -395,7 +410,9 @@ The build and run steps below assume:
   tools needed to build both parts **natively on the Arm** — no DOCA devel container is required.
 - **`perftest` (`ib_write_bw`) and `mlxconfig`/`mlxfwreset` (MFT)** are installed for driving RoCE
   traffic and for the firmware NV-config step above.
-- Hugepages are configured (DPDK-based programs, e.g. `doca-flow-ecn`, need them).
+- Hugepages are reserved (DPDK/DPA programs — `doca-flow-ecn` and `doca_pcc` — need them). This is
+  done for you by [`setup.sh`](setup.sh) (`dpdk-hugepages.py --reserve 4G`); it does not persist
+  across reboots, so re-run `setup.sh` after every boot/power-cycle.
 
 # Building the DOCA Flow program
 
@@ -424,8 +441,8 @@ We want to exercise both the DOCA Flow pipeline and the DOCA PCC pipeline. The e
 
 The example will be tested by running both a server and a client on the ARM cores, and see how the throughput changes when the ECN bits are set by the DOCA Flow application.
 
-- Server: `$ sudo ip netns exec ns0 ib_write_bw -d mlx5_2 -x 1 -F --report_gbits --run_infinitely -D 1`
-- Client: `$ sudo ip netns exec ns1 ib_write_bw -d mlx5_3 -x 1 -F 10.0.0.1 --report_gbits --run_infinitely -D 1`
+- Server: [run_server.sh](run_server.sh)
+- Client: [run_client.sh](run_client.sh)
 
 ## End-to-end data path (both parts together)
 
