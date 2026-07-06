@@ -3,3 +3,4 @@ build
 env
 *.code-workspace
 doca-pcc-ecn/app
+ttyplot

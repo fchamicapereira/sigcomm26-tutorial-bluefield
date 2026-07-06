@@ -290,13 +290,14 @@ In the *host* (default namespace) the same SF netdevs appear under their eSwitch
 `en3f0pf0sf0` (PF0 SF) and `en3f1pf1sf0` (PF1 SF); moving them into `ns0`/`ns1` renames them to
 `enp3s0f0s0`/`enp3s0f1s0`.
 
-Run [`setup.sh`](setup.sh) to build this whole layout: it reserves hugepages, creates `ns0`/`ns1`,
-moves each SF's RDMA device and netdev into its namespace, assigns the IPs, and pins the sender's
-neighbor for the receiver to an **unknown MAC** (`12:34:56:78:9a:bc`, *not* `mlx5_2`'s real MAC — see
-below). **None of this survives a reboot or power-cycle, so re-run it after every boot:**
+Run [`setup_roce_loopback.sh`](setup_roce_loopback.sh) to build this whole layout: it reserves
+hugepages, creates `ns0`/`ns1`, moves each SF's RDMA device and netdev into its namespace, assigns
+the IPs, and pins the sender's neighbor for the receiver to an **unknown MAC**
+(`12:34:56:78:9a:bc`, *not* `mlx5_2`'s real MAC — see below). **None of this survives a reboot or
+power-cycle, so re-run it after every boot:**
 
 ```bash
-./setup.sh
+./setup_roce_loopback.sh
 ```
 
 > **Why namespaces + an unknown-MAC neighbor entry.**
@@ -411,8 +412,9 @@ The build and run steps below assume:
 - **`perftest` (`ib_write_bw`) and `mlxconfig`/`mlxfwreset` (MFT)** are installed for driving RoCE
   traffic and for the firmware NV-config step above.
 - Hugepages are reserved (DPDK/DPA programs — `doca-flow-ecn` and `doca_pcc` — need them). This is
-  done for you by [`setup.sh`](setup.sh) (`dpdk-hugepages.py --reserve 4G`); it does not persist
-  across reboots, so re-run `setup.sh` after every boot/power-cycle.
+  done for you by [`setup_roce_loopback.sh`](setup_roce_loopback.sh)
+  (`dpdk-hugepages.py --reserve 4G`); it does not persist across reboots, so re-run
+  `setup_roce_loopback.sh` after every boot/power-cycle.
 
 # Building the DOCA Flow program
 
