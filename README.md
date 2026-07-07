@@ -396,6 +396,26 @@ DOCA PCC (Part IV) needs two NV-config knobs:
    to start — with `PCC CONFIG object is not supported on this device` (knob 1) or
    `Failed to create PRM process` / syndrome `0x8f333` (knob 2).
 
+> **Gotcha: `USER_PROGRAMMABLE_CC=1` appears to disable the NIC's stock DCQCN, not just add an
+> optional path alongside it.** With `doca_flow_ecn` marking 100% of packets CE and `doca_pcc`
+> **not** running, expect **no** throughput drop — traffic stays pinned at line rate (~92.6 Gb/s)
+> even with `-R` left off entirely (i.e. no rdma_cm/ECE QP→algo-slot negotiation at all, so this
+> isn't an artifact of ECE binding the QP to an empty slot). CNPs genuinely are flowing and being
+> processed in hardware the whole time — `/sys/class/infiniband/mlx5_0/hw_counters/np_cnp_sent` and
+> `mlx5_1/hw_counters/rp_cnp_handled` climb in lockstep, `rp_cnp_ignored` stays `0` — so this isn't
+> "CNPs are missing." It also isn't "the stock decrease is just gentle": the classic DCQCN decrease
+> factor is tunable live at `/sys/devices/.../net/p1/ecn/roce_rp/rpg_gd` (sender-side port, since
+> the sender is the RP); pushing it from the default `11` (≈0.05% rate cut per CNP) down to `3`
+> (≈12.5% per CNP, a ~250x more aggressive cut) made zero measurable difference. Working
+> explanation: `USER_PROGRAMMABLE_CC=1` is a persistent NV-config mode, not a per-QP setting — once
+> it's live, the firmware seems to route RP rate decisions through the DPA algorithm slot
+> unconditionally, whether or not a program is loaded there. With `doca_pcc` not running that slot
+> is empty, so CNPs still get parsed and counted but nothing ever writes a new rate back to the QP.
+> Practically: **on a DPU configured for this tutorial, there's no way to observe plain stock
+> DCQCN** — either a PCC algorithm is loaded and reacting, or nothing reacts, regardless of `-R`.
+> (Not yet confirmed by the one fully decisive test — `USER_PROGRAMMABLE_CC=0` + a full
+> power-cycle — since that would also temporarily break Part IV.)
+
 # Testing the setup
 
 Checking if we indeed get the 100G link between the two ports of the BlueField-3 DPU:
@@ -545,8 +565,9 @@ sudo ./build/doca-flow/doca_flow_ecn
 sudo timeout 40 stdbuf -oL ./doca-pcc-ecn/app/build/pcc/doca_pcc -d mlx5_1 -l 50 > rp.log 2>&1 &
 
 # 3. Drive RoCE traffic. -R (rdma_cm) is MANDATORY: the QP→algo-slot-0 binding is negotiated
-#    via RoCE ECE, which perftest only performs with -R. Without it the built-in default algo
-#    runs and the custom controller never fires.
+#    via RoCE ECE, which perftest only performs with -R. Without it the custom controller never
+#    fires — and, per the gotcha above, no rate reaction happens at all (the "default algo"
+#    fallback is not observed to actually reduce rate on this NV-config).
 sudo ip netns exec ns0 ib_write_bw -d mlx5_2 -R -x 1 -F --report_gbits --run_infinitely -D 1            # server
 sudo ip netns exec ns1 ib_write_bw -d mlx5_3 -R -x 1 -F 10.0.0.1 --report_gbits --run_infinitely -D 1   # client
 

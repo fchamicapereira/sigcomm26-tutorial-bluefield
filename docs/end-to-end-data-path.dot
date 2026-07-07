@@ -4,36 +4,108 @@ digraph end_to_end_data_path {
   labelloc="t";
   fontsize=16;
   label="End-to-end data path (DOCA Flow + DOCA PCC together)";
-  nodesep=0.6;
+  nodesep=0.5;
   ranksep=0.7;
   node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
   edge [fontname="Helvetica", fontsize=10];
 
-  subgraph cluster_sender {
-    label="Sender / client (RP)";
+  subgraph cluster_arm {
+    label="ARM cores";
     style="rounded";
-    color="#888888";
-    sender [label="ns1 · enp3s0f1s0 · mlx5_3\n10.0.0.2", fillcolor="#dbe9ff"];
+    color="#666666";
+    fontsize=13;
+
+    receiver [label="Receiver", fillcolor="#eeeeee"];
+    sender [label="Sender", fillcolor="#eeeeee"];
   }
 
-  p1 [label="p1 uplink (mlx5_1)\nRP PCC controller runs here"];
-  p0 [label="p0 uplink (mlx5_0)"];
-
-  fdb [label="PF0 eSwitch (FDB)\nDOCA Flow ECN:\nset CE on all IPv4,\ndeliver to mlx5_2", fillcolor="#ffe9b3"];
-
-  subgraph cluster_receiver {
-    label="Receiver / server (NP)";
+  subgraph cluster_asic {
+    label="NIC ASIC";
     style="rounded";
-    color="#888888";
-    receiver [label="ns0 · enp3s0f0s0 · mlx5_2\n10.0.0.1", fillcolor="#dbe9ff"];
+    color="#444444";
+    fontsize=13;
+
+    subgraph cluster_sf {
+      label="SF vports";
+      style="rounded";
+      color="#888888";
+      fontsize=11;
+
+      mlx5_3 [label="mlx5_3", fillcolor="#dbe9ff"];
+      mlx5_2 [label="mlx5_2", fillcolor="#dbe9ff"];
+    }
+
+    /* ONE eSwitch hardware block. PF0/PF1 are logical domains inside it (verified: they don't
+     * shortcut each other — crossing needs the physical wire round-trip — but that's a logical
+     * isolation, not separate silicon), same as DPA below. */
+    subgraph cluster_eswitch {
+      label="eSwitch";
+      style="rounded";
+      color="#888888";
+      fontsize=11;
+
+      eswitch_pf0 [label="PF0\n(ECN_MARK)", fillcolor="#e6ddf5"];
+      eswitch_pf1 [label="PF1\n(L2 forward)", fillcolor="#e6ddf5"];
+    }
+
+    subgraph cluster_ports {
+      label="Physical ports";
+      style="rounded";
+      color="#888888";
+      fontsize=11;
+
+      p1 [label="p1", fillcolor="#ffe8d1"];
+      p0 [label="p0", fillcolor="#ffe8d1"];
+    }
+
+    /* DPA is a general-purpose accelerator; PCC is just the one context/program we've loaded
+     * onto it for this tutorial (created against mlx5_1 / PF1 only). */
+    subgraph cluster_dpa {
+      label="DPA";
+      style="rounded";
+      color="#2e7d32";
+      fontsize=11;
+
+      pcc [label="PCC", fillcolor="#d5f5d5"];
+    }
   }
 
-  sender -> p1 [label="RoCE WRITE"];
-  p1 -> p0 [label="100G DAC cable", color="#1a6fbf", fontcolor="#1a6fbf", penwidth=2];
-  p0 -> fdb;
-  fdb -> receiver [label="deliver to mlx5_2"];
+  /* forward path (blue): RoCE WRITE, sender -> receiver.
+   * PF0's leg is declared in the SAME column direction as PF1's (mlx5_2 -> eswitch_pf0 -> p0) so
+   * both stacks share rank columns; dir=back keeps the arrowheads pointing the true data
+   * direction (p0 -> eswitch_pf0 -> mlx5_2) without fighting that rank order. */
+  sender -> mlx5_3 [label="1. RoCE WRITE issued", color="#1a6fbf", fontcolor="#1a6fbf"];
+  eswitch_pf1 -> p1 [label="3. forwarded to wire", color="#1a6fbf", fontcolor="#1a6fbf"];
+  mlx5_2 -> eswitch_pf0 [label="6. deliver (CE marked)", color="#1a6fbf", fontcolor="#1a6fbf", dir=back];
+  eswitch_pf0 -> p0 [label="5. wire ingress", color="#1a6fbf", fontcolor="#1a6fbf", dir=back];
+  receiver -> mlx5_2 [label="7. data delivered", color="#1a6fbf", fontcolor="#1a6fbf",
+                      dir=back, constraint=false];
 
-  receiver -> p0 [label="receiver HW emits CNP\non CE-marked packets", color="#c0392b", fontcolor="#c0392b", constraint=false];
-  p0 -> p1 [label="DAC cable\n(CNP returns)", color="#c0392b", fontcolor="#c0392b", penwidth=2, constraint=false];
-  p1 -> sender [label="cuts the QP's rate", style=dashed, color="#555555", fontcolor="#555555", constraint=false];
+  /* the cable: both ports are in the same rightmost column now, so this is a short hop that
+   * exits east out of the ASIC box and loops back in — not a line crossing the whole diagram. */
+  p1 -> p0 [color="black", fontcolor="black", penwidth=2,
+            arrowhead="none", tailport="ne", headport="se", constraint=false,
+            label="100G\ncable"];
+
+  /* return path (red): CNP, receiver -> sender, then DPA reacts. These are now the rank-
+   * determining edges for PF0's column (mlx5_2 -> eswitch_pf0 -> p0, natural direction). */
+  mlx5_2 -> eswitch_pf0 [label="8. CNP emitted", color="#c0392b", fontcolor="#c0392b"];
+  eswitch_pf0 -> p0 [label="9. CNP to wire", color="#c0392b", fontcolor="#c0392b"];
+  eswitch_pf1 -> p1 [label="11. CNP off wire", color="#c0392b", fontcolor="#c0392b", dir=back];
+  /* PF1 pair: mlx5_3's south face is taken by the PCC edges (13/14), which crowds the SE corner
+   * and makes the default multi-edge route sag one leg toward p1/PCC. Pin the blue leg straight
+   * across the east face, and route the red leg up through the empty PF0/PF1 gap instead. */
+  mlx5_3 -> eswitch_pf1 [label="12. CNP delivered", color="#c0392b", fontcolor="#c0392b",
+                         dir=back, tailport="ne", headport="nw"];
+  mlx5_3 -> eswitch_pf1 [label="2. RoCE WRITE", color="#1a6fbf", fontcolor="#1a6fbf",
+                         tailport="e", headport="w"];
+  /* PCC pair: two near-vertical edges whose horizontal labels would otherwise stack on top of
+   * each other and the lines. Ports break the arrowheads on such short vertical edges (and a
+   * portless straight edge sometimes collapses to a stub), so instead use head/tail labels: they
+   * splay the pair into a lens and place the two labels at opposite ends (13 near PCC, 14 near
+   * mlx5_3), swung out to the side so neither sits on a line or on the other label. */
+  mlx5_3 -> pcc [headlabel="13. CNP parsed", labelangle=25, labeldistance=5,
+                 color="#c0392b", fontcolor="#c0392b", constraint=false];
+  mlx5_3 -> pcc [taillabel="14. rate update", labelangle=-25, labeldistance=5, style=dashed,
+                 color="#555555", fontcolor="#555555", dir=back, constraint=false];
 }
