@@ -513,6 +513,18 @@ Regenerate after editing any `.dot` with `make -C docs` — it renders each `.do
 `.png` at 300 DPI, sharp enough to drop straight into slides. Use `make -C docs DPI=96` for quick
 screen-sized renders, or `make -C docs -B` to force a full re-render.)
 
+The `PF0 domain` node above is a whole graph of flow tables collapsed to one box. Zoomed in:
+
+![PF0's eSwitch table graph: PORT_DEMUX is the root table and matches on source vport; wire ingress (vport 0) is steered to ECN_MARK, RANDOM_SAMPLE, or INGRESS_PASSTHROUGH depending on --percent, while SF egress (vport 1) is output straight to the p0 wire and anything else is dropped.](docs/pf0-eswitch-pipes.png)
+
+(source: [`docs/pf0-eswitch-pipes.dot`](docs/pf0-eswitch-pipes.dot)) — a DOCA Flow **pipe is a flow
+table**, not a pipeline stage. The eSwitch is a multi-table match-action switch: every packet, from
+the wire or from an SF, starts at the root table (`PORT_DEMUX`), and each lookup either jumps to
+another table, outputs to a vport, or drops. Which table wire ingress lands in is chosen at startup
+by `--percent`, so `RANDOM_SAMPLE` only exists for `0 < percent < 100` and `ECN_MARK` isn't built at
+all at `percent 0`. Each PF owns its own domain with its own root table; only PF0's is programmed
+here — `fdb_def_rule_en=1` leaves the kernel's default FDB rules in place for PF1.
+
 - **`doca_flow_ecn` on PF0 (`mlx5_0`)** replaces the physical switch's WRED/ECN marking that the
   original 2×BlueField-3 PCC testbed relied on. It marks **CE on every IPv4 packet** arriving from
   the wire (unconditional, not ECT→CE — so any RoCE generator drives the loop).

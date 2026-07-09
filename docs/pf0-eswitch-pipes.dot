@@ -1,0 +1,70 @@
+/* Zoom-in on the single "PF0 domain" node of end-to-end-data-path.dot.
+ *
+ * The eSwitch is a multi-table match-action switch. A DOCA Flow "pipe" is a *flow table*, not a
+ * pipeline stage: it has a match template, entries (rules), a per-entry forward, and a miss
+ * action. Every packet entering the eSwitch — from the wire or from an SF — starts at the root
+ * table, and each lookup either jumps to another table, outputs to a vport, or drops.
+ *
+ * Everything here lives in PF0's eSwitch domain (doca_flow_cfg_set_mode_args "switch,hws", all
+ * pipes created with DOCA_FLOW_PIPE_DOMAIN_DEFAULT, which is the FDB in switch mode). PF1's
+ * domain is untouched — fdb_def_rule_en=1 leaves the kernel's default FDB rules in place there.
+ *
+ * Which table PORT_DEMUX sends wire ingress to depends on percent: the RANDOM_SAMPLE table is
+ * only built for 0 < percent < 100, and ECN_MARK is not built at all at percent 0.
+ */
+digraph pf0_eswitch_pipes {
+  /* Top-to-bottom, unlike the end-to-end figures. In rankdir=LR graphviz lays edge labels out as
+   * virtual nodes *between* ranks, so the long "percent" branch labels physically push the
+   * columns apart and the figure ends up ~4:1 and unusable on a slide. In TB those same labels sit
+   * beside the vertical edges instead, which brings it to roughly square with no label shortening. */
+  rankdir=TB;
+  fontname="Helvetica";
+  labelloc="t";
+  fontsize=16;
+  label="PF0's eSwitch table graph (DOCA Flow pipes)";
+  nodesep=0.45;
+  ranksep=0.75;
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  /* vports: where packets enter and leave the eSwitch */
+  in_p0 [label="p0\n(wire ingress)\nvport 0", fillcolor="#ffe8d1"];
+  in_sf [label="mlx5_2\n(SF egress)\nvport 1", fillcolor="#dbe9ff"];
+  out_sf [label="mlx5_2", fillcolor="#dbe9ff"];
+  out_p0 [label="p0\n(to wire)", fillcolor="#ffe8d1"];
+  drop [label="DROP", fillcolor="#f8d7da", color="#c0392b", fontcolor="#c0392b"];
+
+  subgraph cluster_pf0 {
+    label="eSwitch — PF0 domain";
+    style="rounded";
+    color="#666666";
+    fontsize=12;
+
+    demux [label="PORT_DEMUX  (root)\nmatch: source vport id", fillcolor="#e6ddf5"];
+    sample [label="RANDOM_SAMPLE\nmatch: random & (2^i - 1) == 0?", fillcolor="#e6ddf5"];
+    ecn [label="ECN_MARK\nmatch: IPv4 → set CE", fillcolor="#e6ddf5"];
+    pass [label="INGRESS_PASSTHROUGH\n(no match, just forward)", fillcolor="#e6ddf5"];
+  }
+
+  /* both ingress directions land on the root table */
+  in_p0 -> demux [color="#1a6fbf", fontcolor="#1a6fbf"];
+  in_sf -> demux [color="#c0392b", fontcolor="#c0392b"];
+
+  /* root demuxes on source vport. The wire-ingress branch target is chosen once at startup by
+   * percent — exactly one of these three exists per run — but all three are drawn so the
+   * mechanism is visible. Solid = a real path; dashed is reserved for miss/drop throughout. */
+  demux -> ecn [label="vport 0,\npercent=100", color="#1a6fbf", fontcolor="#1a6fbf"];
+  demux -> sample [label="vport 0,\n0<percent<100", color="#1a6fbf", fontcolor="#1a6fbf"];
+  demux -> pass [label="vport 0,\npercent=0", color="#1a6fbf", fontcolor="#1a6fbf"];
+  demux -> out_p0 [label="vport 1 → output", color="#c0392b", fontcolor="#c0392b"];
+  demux -> drop [label="miss", color="#888888", fontcolor="#888888", style=dashed];
+
+  /* the sampler is a power-of-two approximation: it can only express 1/2^i, i = 1..16, so it
+   * covers neither endpoint (0% is unreachable, and 100% would silently collapse to 50%). */
+  sample -> ecn [label="hit", color="#1a6fbf", fontcolor="#1a6fbf"];
+  sample -> pass [label="miss", color="#888888", fontcolor="#888888", style=dashed];
+
+  ecn -> pass [label="miss\n(non-ECT / already CE)", color="#888888", fontcolor="#888888", style=dashed];
+  ecn -> out_sf [label="output\n(CE marked)", color="#1a6fbf", fontcolor="#1a6fbf"];
+  pass -> out_sf [label="output\n(unmodified)", color="#1a6fbf", fontcolor="#1a6fbf"];
+}
