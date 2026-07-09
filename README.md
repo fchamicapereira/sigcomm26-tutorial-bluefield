@@ -504,9 +504,14 @@ The example will be tested by running both a server and a client on the ARM core
 
 ![End-to-end data path: sender (ns1/mlx5_3) sends a RoCE WRITE out p1, across the 100G DAC cable to p0, through PF0's eSwitch where DOCA Flow ECN marks CE and delivers to mlx5_2; the receiver emits a CNP that returns the same way, and the RP PCC controller on mlx5_1 reacts by cutting the sender QP's rate.](docs/end-to-end-data-path.png)
 
-(source: [`docs/end-to-end-data-path.dot`](docs/end-to-end-data-path.dot), rendered with
-`dot -Tpng docs/end-to-end-data-path.dot -o docs/end-to-end-data-path.png`; regenerate after
-editing the `.dot` file)
+(source: [`docs/end-to-end-data-path.dot`](docs/end-to-end-data-path.dot). Two companion figures show
+the same path *before* PCC is loaded: [`docs/end-to-end-data-path-pre-pcc.dot`](docs/end-to-end-data-path-pre-pcc.dot)
+— `USER_PROGRAMMABLE_CC=1` with an empty DPA algo slot, so CNPs arrive, are handled, and nothing
+reacts — and [`docs/end-to-end-data-path-pre-pcc-default-cc.dot`](docs/end-to-end-data-path-pre-pcc-default-cc.dot)
+— `USER_PROGRAMMABLE_CC=0`, where the NIC's stock DCQCN reaction point cuts the rate instead.
+Regenerate after editing any `.dot` with `make -C docs` — it renders each `.dot` to a same-named
+`.png` at 300 DPI, sharp enough to drop straight into slides. Use `make -C docs DPI=96` for quick
+screen-sized renders, or `make -C docs -B` to force a full re-render.)
 
 - **`doca_flow_ecn` on PF0 (`mlx5_0`)** replaces the physical switch's WRED/ECN marking that the
   original 2×BlueField-3 PCC testbed relied on. It marks **CE on every IPv4 packet** arriving from

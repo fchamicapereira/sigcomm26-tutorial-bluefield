@@ -1,9 +1,9 @@
-digraph end_to_end_data_path {
+digraph end_to_end_data_path_pre_pcc {
   rankdir=LR;
   fontname="Helvetica";
   labelloc="t";
   fontsize=16;
-  label="DOCA Flow + DOCA PCC (USER_PROGRAMMABLE_CC=1, PCC loaded)";
+  label="DOCA Flow only (USER_PROGRAMMABLE_CC=1, no PCC loaded)";
   nodesep=0.5;
   ranksep=0.7;
   node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
@@ -58,15 +58,18 @@ digraph end_to_end_data_path {
       p0 [label="p0", fillcolor="#ffe8d1"];
     }
 
-    /* DPA is a general-purpose accelerator; PCC is just the one context/program we've loaded
-     * onto it for this tutorial (created against mlx5_1 / PF1 only). */
+    /* The DPA hardware is present either way; what's missing here is a *program* in its algo
+     * slot. With USER_PROGRAMMABLE_CC=1 the firmware routes RP rate decisions through this slot
+     * unconditionally, so an empty slot means no rate update is ever written back (see the
+     * "Gotcha: USER_PROGRAMMABLE_CC=1" note in README.md). */
     subgraph cluster_dpa {
       label="DPA";
       style="rounded";
-      color="#2e7d32";
+      color="#888888";
       fontsize=11;
 
-      pcc [label="PCC", fillcolor="#d5f5d5"];
+      slot [label="algo slot 0\n(empty — nothing\nwrites a rate back)", style="rounded,filled,dashed",
+            fillcolor="#f0f0f0", color="#aaaaaa", fontcolor="#888888", fontsize=10];
     }
   }
 
@@ -87,25 +90,22 @@ digraph end_to_end_data_path {
             arrowhead="none", tailport="ne", headport="se", constraint=false,
             label="100G\ncable"];
 
-  /* return path (red): CNP, receiver -> sender, then DPA reacts. These are now the rank-
-   * determining edges for PF0's column (mlx5_2 -> eswitch_pf0 -> p0, natural direction). */
+  /* return path (red): CNP, receiver -> sender. These are the rank-determining edges for PF0's
+   * column (mlx5_2 -> eswitch_pf0 -> p0, natural direction). */
   mlx5_2 -> eswitch_pf0 [label="8. CNP emitted", color="#c0392b", fontcolor="#c0392b"];
   eswitch_pf0 -> p0 [label="9. CNP to wire", color="#c0392b", fontcolor="#c0392b"];
   eswitch_pf1 -> p1 [label="11. CNP off wire", color="#c0392b", fontcolor="#c0392b", dir=back];
-  /* PF1 pair: mlx5_3's south face is taken by the PCC edges (13/14), which crowds the SE corner
-   * and makes the default multi-edge route sag one leg toward p1/PCC. Pin the blue leg straight
-   * across the east face, and route the red leg up through the empty PF0/PF1 gap instead. */
+  /* PF1 pair: pin the blue leg straight across the east face, and route the red leg up through
+   * the empty PF0/PF1 gap, so neither sags toward p1. */
   mlx5_3 -> eswitch_pf1 [label="12. CNP delivered", color="#c0392b", fontcolor="#c0392b",
                          dir=back, tailport="ne", headport="nw"];
   mlx5_3 -> eswitch_pf1 [label="2. RoCE WRITE", color="#1a6fbf", fontcolor="#1a6fbf",
                          tailport="e", headport="w"];
-  /* PCC pair: two near-vertical edges whose horizontal labels would otherwise stack on top of
-   * each other and the lines. Ports break the arrowheads on such short vertical edges (and a
-   * portless straight edge sometimes collapses to a stub), so instead use head/tail labels: they
-   * splay the pair into a lens and place the two labels at opposite ends (13 near PCC, 14 near
-   * mlx5_3), swung out to the side so neither sits on a line or on the other label. */
-  mlx5_3 -> pcc [headlabel="13. CNP parsed", labelangle=25, labeldistance=5,
-                 color="#c0392b", fontcolor="#c0392b", constraint=false];
-  mlx5_3 -> pcc [taillabel="14. rate update", labelangle=-25, labeldistance=5, style=dashed,
-                 color="#555555", fontcolor="#555555", dir=back, constraint=false];
+
+  /* Where the loop dies: the RP hardware genuinely handles every CNP (rp_cnp_handled tracks
+   * np_cnp_sent 1:1), but the slot it defers the rate decision to is empty, so nothing is ever
+   * written back. There is deliberately NO return edge here — the missing counterpart to the
+   * PCC diagram's "14. rate update" is the whole point of this figure. */
+  mlx5_3 -> slot [label="13. CNP handled,\ndeferred to slot",
+                  color="#c0392b", fontcolor="#c0392b", constraint=false];
 }

@@ -1,9 +1,20 @@
-digraph end_to_end_data_path {
+/* Companion to end-to-end-data-path.dot and end-to-end-data-path-pre-pcc.dot.
+ *
+ * This figure shows the DPU configured with USER_PROGRAMMABLE_CC=0 (the factory default), where
+ * the NIC's own stock DCQCN reaction point handles CNPs and no DPA program is involved.
+ *
+ * NOTE: this configuration was NOT exercised on our DPU — reverting the knob requires a full
+ * power-cycle and would disable Part IV (see README.md, "Firmware NV-config"). What's drawn here
+ * is standard, documented DCQCN RP behavior, not something we measured. The two sibling figures
+ * *are* measured: with USER_PROGRAMMABLE_CC=1 the rate decision is deferred to the DPA algo slot,
+ * which either holds our PCC program (main figure) or is empty (pre-pcc figure, no reaction).
+ */
+digraph end_to_end_data_path_pre_pcc_default_cc {
   rankdir=LR;
   fontname="Helvetica";
   labelloc="t";
   fontsize=16;
-  label="DOCA Flow + DOCA PCC (USER_PROGRAMMABLE_CC=1, PCC loaded)";
+  label="DOCA Flow only (USER_PROGRAMMABLE_CC=0, default CC)";
   nodesep=0.5;
   ranksep=0.7;
   node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
@@ -37,7 +48,7 @@ digraph end_to_end_data_path {
 
     /* ONE eSwitch hardware block. PF0/PF1 are logical domains inside it (verified: they don't
      * shortcut each other — crossing needs the physical wire round-trip — but that's a logical
-     * isolation, not separate silicon), same as DPA below. */
+     * isolation, not separate silicon). */
     subgraph cluster_eswitch {
       label="eSwitch";
       style="rounded";
@@ -58,16 +69,10 @@ digraph end_to_end_data_path {
       p0 [label="p0", fillcolor="#ffe8d1"];
     }
 
-    /* DPA is a general-purpose accelerator; PCC is just the one context/program we've loaded
-     * onto it for this tutorial (created against mlx5_1 / PF1 only). */
-    subgraph cluster_dpa {
-      label="DPA";
-      style="rounded";
-      color="#2e7d32";
-      fontsize=11;
-
-      pcc [label="PCC", fillcolor="#d5f5d5"];
-    }
+    /* Not a separate subsystem like the DPA: the stock RP state machine lives in the NIC's own
+     * transport/QP engine. Drawn in the DPA's slot position so the three figures line up for a
+     * side-by-side read. Its knobs are the roce_rp/* sysfs params (rpg_gd, rpg_ai_rate, ...). */
+    dcqcn [label="stock DCQCN", fillcolor="#fff3cd"];
   }
 
   /* forward path (blue): RoCE WRITE, sender -> receiver.
@@ -87,25 +92,24 @@ digraph end_to_end_data_path {
             arrowhead="none", tailport="ne", headport="se", constraint=false,
             label="100G\ncable"];
 
-  /* return path (red): CNP, receiver -> sender, then DPA reacts. These are now the rank-
+  /* return path (red): CNP, receiver -> sender, then the stock RP reacts. These are the rank-
    * determining edges for PF0's column (mlx5_2 -> eswitch_pf0 -> p0, natural direction). */
   mlx5_2 -> eswitch_pf0 [label="8. CNP emitted", color="#c0392b", fontcolor="#c0392b"];
   eswitch_pf0 -> p0 [label="9. CNP to wire", color="#c0392b", fontcolor="#c0392b"];
   eswitch_pf1 -> p1 [label="11. CNP off wire", color="#c0392b", fontcolor="#c0392b", dir=back];
-  /* PF1 pair: mlx5_3's south face is taken by the PCC edges (13/14), which crowds the SE corner
-   * and makes the default multi-edge route sag one leg toward p1/PCC. Pin the blue leg straight
-   * across the east face, and route the red leg up through the empty PF0/PF1 gap instead. */
+  /* PF1 pair: pin the blue leg straight across the east face, and route the red leg up through
+   * the empty PF0/PF1 gap, so neither sags toward p1. */
   mlx5_3 -> eswitch_pf1 [label="12. CNP delivered", color="#c0392b", fontcolor="#c0392b",
                          dir=back, tailport="ne", headport="nw"];
   mlx5_3 -> eswitch_pf1 [label="2. RoCE WRITE", color="#1a6fbf", fontcolor="#1a6fbf",
                          tailport="e", headport="w"];
-  /* PCC pair: two near-vertical edges whose horizontal labels would otherwise stack on top of
-   * each other and the lines. Ports break the arrowheads on such short vertical edges (and a
-   * portless straight edge sometimes collapses to a stub), so instead use head/tail labels: they
-   * splay the pair into a lens and place the two labels at opposite ends (13 near PCC, 14 near
-   * mlx5_3), swung out to the side so neither sits on a line or on the other label. */
-  mlx5_3 -> pcc [headlabel="13. CNP parsed", labelangle=25, labeldistance=5,
-                 color="#c0392b", fontcolor="#c0392b", constraint=false];
-  mlx5_3 -> pcc [taillabel="14. rate update", labelangle=-25, labeldistance=5, style=dashed,
-                 color="#555555", fontcolor="#555555", dir=back, constraint=false];
+
+  /* CC pair: two near-vertical edges whose horizontal labels would otherwise stack on top of each
+   * other and the lines. Ports break the arrowheads on such short vertical edges (and a portless
+   * straight edge sometimes collapses to a stub), so instead use head/tail labels: they splay the
+   * pair into a lens and place the two labels at opposite ends, swung out to the side. */
+  mlx5_3 -> dcqcn [headlabel="13. CNP handled", labelangle=25, labeldistance=5,
+                   color="#c0392b", fontcolor="#c0392b", constraint=false];
+  mlx5_3 -> dcqcn [taillabel="14. rate cut", labelangle=-25, labeldistance=5, style=dashed,
+                   color="#555555", fontcolor="#555555", dir=back, constraint=false];
 }
