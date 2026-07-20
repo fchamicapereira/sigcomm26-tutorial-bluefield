@@ -326,8 +326,8 @@ static struct doca_flow_pipe_entry *add_mac_rewrite_entry(struct doca_flow_pipe 
 
   memcpy(actions.outer.eth.dst_mac, RECEIVER_MAC, sizeof(RECEIVER_MAC));
 
-  err = doca_flow_pipe_add_entry(0, pipe, &match, &actions, &monitor, NULL, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (mac rewrite)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, &actions, &monitor, NULL, 0, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (mac rewrite)");
 
   err = doca_flow_entries_process(port, 0, 10000, 1);
   crash_if_unsuccessful(err, "doca_flow_entries_process (mac rewrite)");
@@ -340,9 +340,9 @@ static struct doca_flow_pipe_entry *add_mac_rewrite_entry(struct doca_flow_pipe 
 }
 
 /*
- * Root pipe of the eSwitch FDB. Demuxes on source port (parser_meta.port_meta):
- *   port_meta == 0  (ingress from p0 wire)   -> MAC_REWRITE
- *   port_meta == 1  (egress from mlx5_2 SF)   -> port 0 (p0 wire)
+ * Root pipe of the eSwitch FDB. Demuxes on source port (parser_meta.port_id):
+ *   port_id == 0  (ingress from p0 wire)   -> MAC_REWRITE
+ *   port_id == 1  (egress from mlx5_2 SF)   -> port 0 (p0 wire)
  *
  * See doca_flow_ecn.c's create_port_demux_pipe for the full rationale (same design).
  */
@@ -355,8 +355,8 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   struct doca_flow_pipe *pipe;
   doca_error_t err;
 
-  match.parser_meta.port_meta = UINT32_MAX;      /* variable — set per entry      */
-  match_mask.parser_meta.port_meta = UINT32_MAX; /* exact match on source port id */
+  match.parser_meta.port_id = UINT16_MAX;      /* variable — set per entry      */
+  match_mask.parser_meta.port_id = UINT16_MAX; /* exact match on source port id */
 
   err = doca_flow_pipe_cfg_create(&cfg, port);
   crash_if_unsuccessful(err, "doca_flow_pipe_cfg_create (demux)");
@@ -383,21 +383,21 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   struct doca_flow_pipe_entry *entry;
 
   /* port 0 (p0 wire ingress) -> MAC_REWRITE; batch, flush with next entry */
-  entry_match.parser_meta.port_meta = 0;
+  entry_match.parser_meta.port_id = 0;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PIPE;
   entry_fwd.next_pipe = mac_pipe;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, DOCA_FLOW_WAIT_FOR_BATCH, &status,
-                                 &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux wire->mac)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux wire->mac)");
 
   /* port 1 (mlx5_2 SF egress) -> p0 wire; flags=0 flushes the batch */
-  entry_match.parser_meta.port_meta = 1;
+  entry_match.parser_meta.port_id = 1;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PORT;
   entry_fwd.port_id = 0;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux sf->wire)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd, 0, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux sf->wire)");
 
   err = doca_flow_entries_process(port, 0, 10000, 2);
   crash_if_unsuccessful(err, "doca_flow_entries_process (demux)");

@@ -345,8 +345,9 @@ static struct doca_flow_pipe_entry *add_fwd_entry(struct doca_flow_pipe *pipe, s
   match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
   /* dscp_ecn left 0; mask=0x00 means any dscp_ecn matches → catches all IPv4 */
 
-  err = doca_flow_pipe_add_entry(0, pipe, &match, NULL, with_counter ? &monitor : NULL, NULL, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (%s)", label);
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, NULL, with_counter ? &monitor : NULL, NULL, 0, &status,
+                                       &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (%s)", label);
 
   err = doca_flow_entries_process(port, 0, 10000, 1);
   crash_if_unsuccessful(err, "doca_flow_entries_process (%s)", label);
@@ -446,14 +447,13 @@ static struct ecn_entries add_ecn_entries(struct doca_flow_pipe *pipe, struct do
   struct ecn_entries entries = {0}; /* .passthrough set by the caller once its pipe exists */
   doca_error_t err;
 
-  actions.action_idx = 0;
   actions.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
   actions.outer.ip4.dscp_ecn = 0x03; /* SET to CE (DSCP=0, ECN=11) */
 
   /* Single entry: all IPv4 (dscp_ecn wildcarded by the pipe mask) → CE; flags=0 flushes */
   match.outer.ip4.dscp_ecn = 0x00; /* don't-care: pipe match_mask is 0x00 */
-  err = doca_flow_pipe_add_entry(0, pipe, &match, &actions, &monitor, NULL, 0, &status, &entries.ce);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry CE");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, &actions, &monitor, NULL, 0, &status, &entries.ce);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry CE");
 
   err = doca_flow_entries_process(port, 0, 10000 /* us */, NB_ENTRIES);
   crash_if_unsuccessful(err, "doca_flow_entries_process");
@@ -509,8 +509,8 @@ static struct doca_flow_pipe *create_random_sample_pipe(struct doca_flow_port *p
   crash_if_unsuccessful(err, "doca_flow_pipe_create (random sample)");
   doca_flow_pipe_cfg_destroy(cfg);
 
-  err = doca_flow_pipe_add_entry(0, pipe, &match, NULL, NULL, NULL, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (random sample)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, NULL, NULL, NULL, 0, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (random sample)");
 
   err = doca_flow_entries_process(port, 0, 10000, 1);
   crash_if_unsuccessful(err, "doca_flow_entries_process (random sample)");
@@ -522,16 +522,16 @@ static struct doca_flow_pipe *create_random_sample_pipe(struct doca_flow_port *p
 }
 
 /*
- * Root pipe of the eSwitch FDB. Demuxes on source port (parser_meta.port_meta):
- *   port_meta == 0  (ingress from p0 wire)   -> wire_ingress_target (mark or passthrough)
- *   port_meta == 1  (egress from mlx5_2 SF)   -> port 0 (p0 wire), so mlx5_2's RoCE
+ * Root pipe of the eSwitch FDB. Demuxes on source port (parser_meta.port_id):
+ *   port_id == 0  (ingress from p0 wire)   -> wire_ingress_target (mark or passthrough)
+ *   port_id == 1  (egress from mlx5_2 SF)   -> port 0 (p0 wire), so mlx5_2's RoCE
  *                                                ACKs/CNPs cross the cable back to mlx5_3
  *
  * The source-port match is the crux of the return path. A single root pipe in the
  * DEFAULT domain sees *all* FDB traffic, including mlx5_2's ACKs/CNPs. Routing those
  * through ECN_MARK would forward them to port 1 (looping them back to mlx5_2) — and
  * would also wrongly CE-mark them — so the sender never sees an ACK and the QP dies
- * with RETRY_EXC. Forwarding port_meta==1 straight to port 0 here keeps mlx5_2's egress
+ * with RETRY_EXC. Forwarding port_id==1 straight to port 0 here keeps mlx5_2's egress
  * off the mark pipe and puts it on the wire; no EGRESS-domain pipe is needed.
  *
  * wire_ingress_target selects where p0-wire ingress starts: the ECN_MARK/RANDOM_SAMPLE pipe
@@ -546,8 +546,8 @@ static void create_port_demux_pipe(struct doca_flow_port *port, struct doca_flow
   struct doca_flow_pipe *pipe;
   doca_error_t err;
 
-  match.parser_meta.port_meta = UINT32_MAX;      /* variable — set per entry      */
-  match_mask.parser_meta.port_meta = UINT32_MAX; /* exact match on source port id */
+  match.parser_meta.port_id = UINT16_MAX;      /* variable — set per entry      */
+  match_mask.parser_meta.port_id = UINT16_MAX; /* exact match on source port id */
 
   err = doca_flow_pipe_cfg_create(&cfg, port);
   crash_if_unsuccessful(err, "doca_flow_pipe_cfg_create (demux)");
@@ -574,20 +574,21 @@ static void create_port_demux_pipe(struct doca_flow_port *port, struct doca_flow
   struct doca_flow_pipe_entry *entry;
 
   /* port 0 (p0 wire ingress) -> wire_ingress_target; batch, flush with next entry */
-  entry_match.parser_meta.port_meta = 0;
+  entry_match.parser_meta.port_id = 0;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PIPE;
   entry_fwd.next_pipe = wire_ingress_target;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, DOCA_FLOW_WAIT_FOR_BATCH, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux wire->target)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux wire->target)");
 
   /* port 1 (mlx5_2 SF egress) -> p0 wire; flags=0 flushes the batch */
-  entry_match.parser_meta.port_meta = 1;
+  entry_match.parser_meta.port_id = 1;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PORT;
   entry_fwd.port_id = 0;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux sf->wire)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd, 0, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux sf->wire)");
 
   err = doca_flow_entries_process(port, 0, 10000, 2);
   crash_if_unsuccessful(err, "doca_flow_entries_process (demux)");

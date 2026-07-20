@@ -3,6 +3,8 @@ project('sigcomm26-tutorial-bluefield', 'C',
 	license: 'BSD-3-Clause',
 	default_options: [
 		'buildtype=debug',
+		'cpp_std=c++11',
+		'pkg_config_path=/opt/mellanox/doca/lib/x86_64-linux-gnu/pkgconfig:/opt/mellanox/dpdk/lib/x86_64-linux-gnu/pkgconfig:/opt/mellanox/doca/lib/aarch64-linux-gnu/pkgconfig:/opt/mellanox/dpdk/lib/aarch64-linux-gnu/pkgconfig'
 	],
 	meson_version: '>= 0.61.2'
 )

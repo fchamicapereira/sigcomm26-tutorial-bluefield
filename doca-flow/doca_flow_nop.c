@@ -315,8 +315,9 @@ static struct doca_flow_pipe_entry *add_fwd_entry(struct doca_flow_pipe *pipe, s
   match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
   /* dscp_ecn left 0; mask=0x00 means any dscp_ecn matches → catches all IPv4 */
 
-  err = doca_flow_pipe_add_entry(0, pipe, &match, NULL, with_counter ? &monitor : NULL, NULL, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (fwd)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, NULL, with_counter ? &monitor : NULL, NULL, 0, &status,
+                                       &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (fwd)");
 
   err = doca_flow_entries_process(port, 0, 10000, 1);
   crash_if_unsuccessful(err, "doca_flow_entries_process (fwd)");
@@ -329,9 +330,9 @@ static struct doca_flow_pipe_entry *add_fwd_entry(struct doca_flow_pipe *pipe, s
 }
 
 /*
- * Root pipe of the eSwitch FDB. Demuxes on source port (parser_meta.port_meta):
- *   port_meta == 0  (ingress from p0 wire)   -> the FORWARD pipe (straight to mlx5_2)
- *   port_meta == 1  (egress from mlx5_2 SF)   -> port 0 (p0 wire), so mlx5_2's RoCE
+ * Root pipe of the eSwitch FDB. Demuxes on source port (parser_meta.port_id):
+ *   port_id == 0  (ingress from p0 wire)   -> the FORWARD pipe (straight to mlx5_2)
+ *   port_id == 1  (egress from mlx5_2 SF)   -> port 0 (p0 wire), so mlx5_2's RoCE
  *                                                ACKs/CNPs cross the cable back to mlx5_3
  *
  * See doca_flow_ecn.c's create_port_demux_pipe for the full rationale (same design).
@@ -345,8 +346,8 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   struct doca_flow_pipe *pipe;
   doca_error_t err;
 
-  match.parser_meta.port_meta = UINT32_MAX;      /* variable — set per entry      */
-  match_mask.parser_meta.port_meta = UINT32_MAX; /* exact match on source port id */
+  match.parser_meta.port_id = UINT16_MAX;      /* variable — set per entry      */
+  match_mask.parser_meta.port_id = UINT16_MAX; /* exact match on source port id */
 
   err = doca_flow_pipe_cfg_create(&cfg, port);
   crash_if_unsuccessful(err, "doca_flow_pipe_cfg_create (demux)");
@@ -373,21 +374,21 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   struct doca_flow_pipe_entry *entry;
 
   /* port 0 (p0 wire ingress) -> FORWARD; batch, flush with next entry */
-  entry_match.parser_meta.port_meta = 0;
+  entry_match.parser_meta.port_id = 0;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PIPE;
   entry_fwd.next_pipe = fwd_pipe;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, DOCA_FLOW_WAIT_FOR_BATCH, &status,
-                                 &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux wire->fwd)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux wire->fwd)");
 
   /* port 1 (mlx5_2 SF egress) -> p0 wire; flags=0 flushes the batch */
-  entry_match.parser_meta.port_meta = 1;
+  entry_match.parser_meta.port_id = 1;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PORT;
   entry_fwd.port_id = 0;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux sf->wire)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd, 0, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux sf->wire)");
 
   err = doca_flow_entries_process(port, 0, 10000, 2);
   crash_if_unsuccessful(err, "doca_flow_entries_process (demux)");
