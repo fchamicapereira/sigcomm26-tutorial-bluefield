@@ -31,6 +31,12 @@ DOCA_LOG_REGISTER(FLOW_NOP);
 #define NB_QUEUES 1
 #define NB_COUNTERS 1 /* single forward entry, counted so its traffic is observable */
 
+struct nop_app_config {
+  struct doca_dev *dev;           /* PF device (from -a or inferred from -r) */
+  struct doca_dev_rep *dev_rep;   /* SF representor (from -r) */
+  const char *devargs;            /* optional devargs from the argp device syntax */
+};
+
 static volatile bool g_running = true;
 
 static void signal_handler(int signum) {
@@ -103,30 +109,15 @@ static doca_error_t initialize_dpdk(int argc, char **argv) {
   return DOCA_SUCCESS;
 }
 
-/* Open the Nth DOCA device and probe it into DPDK with caller-supplied args. */
-static struct doca_dev *open_and_probe_dev(uint32_t index, const char *probe_args) {
-  struct doca_devinfo **devinfo_list;
-  uint32_t nb_devs;
-  struct doca_dev *dev;
+/* Probe the device+representor pair (already opened by DOCA argp) into DPDK. */
+static void probe_device(struct nop_app_config *cfg) {
   doca_error_t err;
+  /* dv_flow_en=2 is required for HWS mode; fdb_def_rule_en=1 keeps the kernel's
+   * default FDB rules for the other PF so its traffic still exits the wire. */
+  const char *devargs = (cfg->devargs && cfg->devargs[0]) ? cfg->devargs : "dv_flow_en=2,fdb_def_rule_en=1";
 
-  err = doca_devinfo_create_list(&devinfo_list, &nb_devs);
-  crash_if_unsuccessful(err, "doca_devinfo_create_list");
-
-  if (index >= nb_devs) {
-    DOCA_LOG_CRIT("Device index %u out of range (%u devices found)", index, nb_devs);
-    exit(EXIT_FAILURE);
-  }
-
-  err = doca_dev_open(devinfo_list[index], &dev);
-  crash_if_unsuccessful(err, "doca_dev_open");
-
-  doca_devinfo_destroy_list(devinfo_list);
-
-  err = doca_dpdk_port_probe(dev, probe_args);
-  crash_if_unsuccessful(err, "doca_dpdk_port_probe (index=%u)", index);
-
-  return dev;
+  err = doca_dpdk_port_probe_with_representors(cfg->dev, devargs, &cfg->dev_rep, 1);
+  crash_if_unsuccessful(err, "doca_dpdk_port_probe_with_representors");
 }
 
 /*
@@ -228,6 +219,9 @@ static struct doca_flow_port *port_start(struct doca_dev *dev) {
   err = doca_flow_port_cfg_set_devargs(cfg, port_id_str);
   crash_if_unsuccessful(err, "doca_flow_port_cfg_set_devargs");
 
+  err = doca_flow_port_cfg_set_actions_mem_size(cfg, 16 * DOCA_FLOW_MAX_ENTRY_ACTIONS_MEM_SIZE);
+  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_actions_mem_size");
+
   struct doca_flow_port *port;
   err = doca_flow_port_start(cfg, &port);
   crash_if_unsuccessful(err, "doca_flow_port_start");
@@ -238,7 +232,7 @@ static struct doca_flow_port *port_start(struct doca_dev *dev) {
 }
 
 /* Start an arbitrary DPDK port as a DOCA Flow port (used for SF representors). */
-static struct doca_flow_port *rep_port_start(uint16_t dpdk_port_id) {
+static struct doca_flow_port *rep_port_start(uint16_t dpdk_port_id, struct doca_dev_rep *dev_rep) {
   struct doca_flow_port_cfg *cfg;
   char port_id_str[8];
   snprintf(port_id_str, sizeof(port_id_str), "%u", dpdk_port_id);
@@ -248,6 +242,9 @@ static struct doca_flow_port *rep_port_start(uint16_t dpdk_port_id) {
 
   err = doca_flow_port_cfg_set_devargs(cfg, port_id_str);
   crash_if_unsuccessful(err, "doca_flow_port_cfg_set_devargs (rep port %u)", dpdk_port_id);
+
+  err = doca_flow_port_cfg_set_dev_rep(cfg, dev_rep);
+  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_dev_rep (rep port %u)", dpdk_port_id);
 
   struct doca_flow_port *port;
   err = doca_flow_port_start(cfg, &port);
@@ -399,6 +396,54 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   return pipe;
 }
 
+static doca_error_t device_callback(void *param, void *config) {
+  struct nop_app_config *cfg = config;
+  struct doca_argp_device_ctx *dev_ctx = (struct doca_argp_device_ctx *)param;
+
+  cfg->dev = dev_ctx->dev;
+  if (dev_ctx->devargs)
+    cfg->devargs = dev_ctx->devargs;
+  return DOCA_SUCCESS;
+}
+
+static doca_error_t rep_callback(void *param, void *config) {
+  struct nop_app_config *cfg = config;
+  struct doca_argp_device_rep_ctx *rep_ctx = (struct doca_argp_device_rep_ctx *)param;
+
+  cfg->dev = rep_ctx->dev_ctx.dev;
+  cfg->dev_rep = rep_ctx->dev_rep;
+  if (rep_ctx->dev_ctx.devargs)
+    cfg->devargs = rep_ctx->dev_ctx.devargs;
+  return DOCA_SUCCESS;
+}
+
+static void register_nop_params(void) {
+  struct doca_argp_param *dev_param;
+  struct doca_argp_param *rep_param;
+  doca_error_t err;
+
+  err = doca_argp_param_create(&dev_param);
+  crash_if_unsuccessful(err, "doca_argp_param_create (device)");
+  doca_argp_param_set_short_name(dev_param, "a");
+  doca_argp_param_set_long_name(dev_param, "device");
+  doca_argp_param_set_description(dev_param, "DOCA device (e.g., pci/0000:03:00.0,dv_flow_en=2)");
+  doca_argp_param_set_callback(dev_param, device_callback);
+  doca_argp_param_set_type(dev_param, DOCA_ARGP_TYPE_DEVICE);
+  err = doca_argp_register_param(dev_param);
+  crash_if_unsuccessful(err, "doca_argp_register_param (device)");
+
+  err = doca_argp_param_create(&rep_param);
+  crash_if_unsuccessful(err, "doca_argp_param_create (rep)");
+  doca_argp_param_set_short_name(rep_param, "r");
+  doca_argp_param_set_long_name(rep_param, "rep");
+  doca_argp_param_set_description(rep_param,
+                                  "Device representor (e.g., pci/0000:03:00.0,sf0,dv_flow_en=2)");
+  doca_argp_param_set_callback(rep_param, rep_callback);
+  doca_argp_param_set_type(rep_param, DOCA_ARGP_TYPE_DEVICE_REP);
+  err = doca_argp_register_param(rep_param);
+  crash_if_unsuccessful(err, "doca_argp_register_param (rep)");
+}
+
 static void print_stats(struct doca_flow_pipe_entry *fwd_entry) {
   struct doca_flow_resource_query query;
   doca_error_t err = doca_flow_resource_query_entry(fwd_entry, &query);
@@ -420,26 +465,32 @@ int main(int argc, char **argv) {
   err = doca_log_backend_set_sdk_level(sdk_log, DOCA_LOG_LEVEL_WARNING);
   crash_if_unsuccessful(err, "doca_log_backend_set_sdk_level");
 
-  err = doca_argp_init("doca_flow_nop", NULL);
+  struct nop_app_config app_cfg = {.dev = NULL, .dev_rep = NULL, .devargs = NULL};
+
+  err = doca_argp_init("doca_flow_nop", &app_cfg);
   crash_if_unsuccessful(err, "doca_argp_init");
 
   doca_argp_set_dpdk_program(initialize_dpdk);
+  register_nop_params();
 
   err = doca_argp_start(argc, argv);
   crash_if_unsuccessful(err, "doca_argp_start");
 
-  /* PF0 only: DOCA manages PF0's FDB via HWS root pipes (highest priority).
-   * fdb_def_rule_en=1 keeps the kernel's default FDB rules for PF1 so that
-   * mlx5_3's egress traffic exits via p1 wire uplink. */
-  struct doca_dev *dev = open_and_probe_dev(0,
-      "dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf0");
+  if (app_cfg.dev == NULL || app_cfg.dev_rep == NULL) {
+    DOCA_LOG_CRIT("Must specify device representor via -r (e.g., -r pci/0000:03:00.0,sf0,dv_flow_en=2)");
+    exit(EXIT_FAILURE);
+  }
+
+  probe_device(&app_cfg);
+
+  struct doca_dev *dev = app_cfg.dev;
 
   configure_and_start_dpdk_port(dev);
 
   initialize_doca_flow();
 
   struct doca_flow_port *port        = port_start(dev);   /* DPDK 0: PF0 uplink */
-  struct doca_flow_port *sf_rep_port = rep_port_start(1); /* DPDK 1: PF0 SF rep (mlx5_2) */
+  struct doca_flow_port *sf_rep_port = rep_port_start(1, app_cfg.dev_rep); /* DPDK 1: PF0 SF rep (mlx5_2) */
 
   struct doca_flow_pipe *fwd_pipe = create_fwd_pipe(port, 1, /*with_counter=*/true);
   struct doca_flow_pipe_entry *fwd_entry = add_fwd_entry(fwd_pipe, port, /*with_counter=*/true);
