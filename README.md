@@ -291,7 +291,7 @@ control):
 netdevs on the switch side (not the same object as `enp3s0f0s0`/`enp3s0f1s0` below, which are the
 SFs' own consumer-side netdevs).
 
-[`setup_roce_loopback.sh`](setup_roce_loopback.sh) creates these bridges and ports idempotently
+[`setup/setup_roce_loopback.sh`](setup/setup_roce_loopback.sh) creates these bridges and ports idempotently
 (`ovs-vsctl --may-exist ...`), so it's safe to re-run and will re-establish this layout even from
 a box where OVS was never configured.
 
@@ -306,14 +306,14 @@ instead of being delivered locally by the host kernel:
 | `mlx5_core.sf.2` (on PF0) | `mlx5_2` | `enp3s0f0s0` | `ns0` | `10.0.0.1` | `02:c9:c8:ff:a6:24` | **Receiver / server (NP)** |
 | `mlx5_core.sf.3` (on PF1) | `mlx5_3` | `enp3s0f1s0` | `ns1` | `10.0.0.2` | `02:26:3d:d7:e0:4b` | **Sender / client (RP)** |
 
-Run [`setup_roce_loopback.sh`](setup_roce_loopback.sh) to build this whole layout: it ensures the
+Run [`setup/setup_roce_loopback.sh`](setup/setup_roce_loopback.sh) to build this whole layout: it ensures the
 OVS bridges above exist, reserves hugepages, creates `ns0`/`ns1`, moves each SF's RDMA device and
 netdev into its namespace, assigns the IPs, and pins the sender's neighbor for the receiver
 directly to `mlx5_2`'s real MAC (read dynamically from `enp3s0f0s0`, not hardcoded). **None of
 this survives a reboot or power-cycle, so re-run it after every boot:**
 
 ```bash
-./setup_roce_loopback.sh
+./setup/setup_roce_loopback.sh
 ```
 
 > **Why namespaces.** They stop the *Linux kernel* from delivering `10.0.0.1 ↔ 10.0.0.2` locally
@@ -451,9 +451,9 @@ The build and run steps below assume:
 - **`perftest` (`ib_write_bw`) and `mlxconfig`/`mlxfwreset` (MFT)** are installed for driving RoCE
   traffic and for the firmware NV-config step above.
 - Hugepages are reserved (DPDK/DPA programs — the `doca-flow` programs and `doca_pcc` — need them). This is
-  done for you by [`setup_roce_loopback.sh`](setup_roce_loopback.sh)
+  done for you by [`setup/setup_roce_loopback.sh`](setup/setup_roce_loopback.sh)
   (`dpdk-hugepages.py --reserve 4G`); it does not persist across reboots, so re-run
-  `setup_roce_loopback.sh` after every boot/power-cycle.
+  `setup/setup_roce_loopback.sh` after every boot/power-cycle.
 
 # Building the DOCA Flow programs
 
@@ -546,13 +546,18 @@ cd doca-pcc-ecn
 #    /opt ships a prebuilt build/ subdir — drop it so we configure our own from scratch.
 cp -a /opt/mellanox/doca/applications ./app
 rm -rf app/build
+# The applications meson.build reads its version from ../VERSION — a file that lives ONE level
+# ABOVE the applications tree in /opt, so `cp -a applications` leaves it behind. Drop a copy next
+# to app/ or `meson setup` fails with "Command `/usr/bin/cat ../VERSION` failed with status 1".
+cp /opt/mellanox/doca/VERSION ./VERSION
 
 # 2. Apply the pure-ECN controller patch (1 file, touches only algo/rtt_template.c):
 patch -p1 -d app < pureecn_dcqcn.patch
 
-# 3. Configure + build. Put dpacc on PATH so build_device_code.sh finds it; ninja invokes it to
-#    compile the DPA (device-side) algo. Patch BEFORE meson setup — the device build target does
-#    not re-trigger on algo edits, so after any algo change reconfigure from a clean build dir.
+# 3. Configure + build. Put dpacc on PATH so build_device_code.sh finds it; `meson setup` runs it
+#    (via run_command, at configure time) to compile the DPA (device-side) algo — so patch BEFORE
+#    meson setup. The device build does not re-trigger on algo edits, so after any algo change
+#    reconfigure from a clean build dir.
 cd app
 PATH="/opt/mellanox/doca/tools:$PATH" meson setup build -Denable_all_applications=false -Denable_pcc=true
 PATH="/opt/mellanox/doca/tools:$PATH" ninja -C build

@@ -27,6 +27,12 @@ DOCA_LOG_REGISTER(FLOW_MAC);
 #define NB_QUEUES 1
 #define NB_COUNTERS 1 /* single forward entry, counted so its traffic is observable */
 
+/* DOCA 3.4 HWS needs a per-port action-memory pool for any pipe that carries a modify action
+ * (here: MAC_REWRITE). Sized via DOCA's own formula
+ * next_pow2(entries * DOCA_FLOW_MAX_ENTRY_ACTIONS_MEM_SIZE(=128) + 1024); 16 KB is ample here.
+ * Without it, action-template creation fails with rc=-12. */
+#define ACTIONS_MEM_SIZE (16 * 1024)
+
 /*
  * mlx5_2 (PF0 SF0) real MAC. DOCA rewrites the dst MAC in every packet forwarded to port 1
  * (mlx5_2's vport) so the ibverbs hardware QP steering rule — which matches on dst MAC — fires
@@ -89,19 +95,27 @@ static void entry_process_cb(struct doca_flow_pipe_entry *entry, uint16_t pipe_q
 static doca_error_t initialize_dpdk(int argc, char **argv) {
   static char allow_flag[] = "-a";
   static char dummy_pci[] = "pci:00:00.0";
+  static char dummy_aux[] = "auxiliary:";
   char *new_argv[64];
 
-  if (argc >= 62) {
+  if (argc >= 60) {
     DOCA_LOG_ERR("Too many EAL arguments");
     return DOCA_ERROR_INVALID_VALUE;
   }
   for (int i = 0; i < argc; i++) {
     new_argv[i] = argv[i];
   }
+  /* Two dummy allowlist entries so EAL auto-probes nothing on either bus. The "auxiliary:" one
+   * is essential once setup_roce_loopback.sh has moved the SFs (mlx5_core.sf.*) into their own
+   * netns: without it EAL still scans the auxiliary bus and tries to probe those SFs, whose verbs
+   * now live in ns0/ns1 — which fails ("Verbs device not found"). Real ports are attached
+   * explicitly via doca_dpdk_port_probe. Mirrors DOCA's dpdk_init_without_probing (dpdk_utils.c). */
   new_argv[argc] = allow_flag;
   new_argv[argc + 1] = dummy_pci;
+  new_argv[argc + 2] = allow_flag;
+  new_argv[argc + 3] = dummy_aux;
 
-  if (rte_eal_init(argc + 2, new_argv) < 0) {
+  if (rte_eal_init(argc + 4, new_argv) < 0) {
     DOCA_LOG_ERR("EAL initialization failed");
     return DOCA_ERROR_DRIVER;
   }
@@ -227,11 +241,11 @@ static struct doca_flow_port *port_start(struct doca_dev *dev) {
   err = doca_flow_port_cfg_set_dev(cfg, dev);
   crash_if_unsuccessful(err, "doca_flow_port_cfg_set_dev");
 
-  char port_id_str[8];
-  snprintf(port_id_str, sizeof(port_id_str), "%u", port_id);
+  err = doca_flow_port_cfg_set_port_id(cfg, port_id);
+  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_port_id");
 
-  err = doca_flow_port_cfg_set_devargs(cfg, port_id_str);
-  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_devargs");
+  err = doca_flow_port_cfg_set_actions_mem_size(cfg, ACTIONS_MEM_SIZE);
+  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_actions_mem_size");
 
   struct doca_flow_port *port;
   err = doca_flow_port_start(cfg, &port);
@@ -242,17 +256,50 @@ static struct doca_flow_port *port_start(struct doca_dev *dev) {
   return port;
 }
 
-/* Start an arbitrary DPDK port as a DOCA Flow port (used for SF representors). */
-static struct doca_flow_port *rep_port_start(uint16_t dpdk_port_id) {
+/*
+ * Open the doca_dev_rep for PF0's SF network representor. DOCA 3.4 requires a doca_dev_rep
+ * (not just a DPDK port id) to start a representor as a DOCA Flow port. We pick the first entry
+ * that reports an SF index — that skips the host-PF/VF representors and lands on our sf0.
+ */
+static struct doca_dev_rep *open_sf_representor(struct doca_dev *pf_dev) {
+  struct doca_devinfo_rep **rep_list;
+  uint32_t nb_reps;
+  struct doca_dev_rep *rep = NULL;
+  doca_error_t err;
+
+  err = doca_devinfo_rep_create_list(pf_dev, DOCA_DEVINFO_REP_FILTER_NET, &rep_list, &nb_reps);
+  crash_if_unsuccessful(err, "doca_devinfo_rep_create_list");
+
+  for (uint32_t i = 0; i < nb_reps; i++) {
+    uint32_t sf_index;
+    if (doca_devinfo_rep_get_sf_index(rep_list[i], &sf_index) == DOCA_SUCCESS) {
+      err = doca_dev_rep_open(rep_list[i], &rep);
+      crash_if_unsuccessful(err, "doca_dev_rep_open (sf_index=%u)", sf_index);
+      DOCA_LOG_INFO("Opened SF representor (sf_index=%u) as port 1", sf_index);
+      break;
+    }
+  }
+  doca_devinfo_rep_destroy_list(rep_list);
+
+  if (rep == NULL) {
+    DOCA_LOG_CRIT("SF representor not found on PF0");
+    exit(EXIT_FAILURE);
+  }
+  return rep;
+}
+
+/* Start an SF representor (DPDK port dpdk_port_id, DOCA dev_rep) as a DOCA Flow port. */
+static struct doca_flow_port *rep_port_start(uint16_t dpdk_port_id, struct doca_dev_rep *dev_rep) {
   struct doca_flow_port_cfg *cfg;
-  char port_id_str[8];
-  snprintf(port_id_str, sizeof(port_id_str), "%u", dpdk_port_id);
 
   doca_error_t err = doca_flow_port_cfg_create(&cfg);
   crash_if_unsuccessful(err, "doca_flow_port_cfg_create (rep port %u)", dpdk_port_id);
 
-  err = doca_flow_port_cfg_set_devargs(cfg, port_id_str);
-  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_devargs (rep port %u)", dpdk_port_id);
+  err = doca_flow_port_cfg_set_dev_rep(cfg, dev_rep);
+  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_dev_rep (rep port %u)", dpdk_port_id);
+
+  err = doca_flow_port_cfg_set_port_id(cfg, dpdk_port_id);
+  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_port_id (rep port %u)", dpdk_port_id);
 
   struct doca_flow_port *port;
   err = doca_flow_port_start(cfg, &port);
@@ -326,8 +373,9 @@ static struct doca_flow_pipe_entry *add_mac_rewrite_entry(struct doca_flow_pipe 
 
   memcpy(actions.outer.eth.dst_mac, RECEIVER_MAC, sizeof(RECEIVER_MAC));
 
-  err = doca_flow_pipe_add_entry(0, pipe, &match, &actions, &monitor, NULL, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (mac rewrite)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, &actions, &monitor, NULL,
+                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (mac rewrite)");
 
   err = doca_flow_entries_process(port, 0, 10000, 1);
   crash_if_unsuccessful(err, "doca_flow_entries_process (mac rewrite)");
@@ -340,9 +388,9 @@ static struct doca_flow_pipe_entry *add_mac_rewrite_entry(struct doca_flow_pipe 
 }
 
 /*
- * Root pipe of the eSwitch FDB. Demuxes on source port (parser_meta.port_meta):
- *   port_meta == 0  (ingress from p0 wire)   -> MAC_REWRITE
- *   port_meta == 1  (egress from mlx5_2 SF)   -> port 0 (p0 wire)
+ * Root pipe of the eSwitch FDB. Demuxes on source port (parser_meta.port_id):
+ *   port_id == 0  (ingress from p0 wire)   -> MAC_REWRITE
+ *   port_id == 1  (egress from mlx5_2 SF)   -> port 0 (p0 wire)
  *
  * See doca_flow_ecn.c's create_port_demux_pipe for the full rationale (same design).
  */
@@ -355,8 +403,8 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   struct doca_flow_pipe *pipe;
   doca_error_t err;
 
-  match.parser_meta.port_meta = UINT32_MAX;      /* variable — set per entry      */
-  match_mask.parser_meta.port_meta = UINT32_MAX; /* exact match on source port id */
+  match.parser_meta.port_id = UINT16_MAX;      /* variable — set per entry      */
+  match_mask.parser_meta.port_id = UINT16_MAX; /* exact match on source port id */
 
   err = doca_flow_pipe_cfg_create(&cfg, port);
   crash_if_unsuccessful(err, "doca_flow_pipe_cfg_create (demux)");
@@ -383,21 +431,22 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   struct doca_flow_pipe_entry *entry;
 
   /* port 0 (p0 wire ingress) -> MAC_REWRITE; batch, flush with next entry */
-  entry_match.parser_meta.port_meta = 0;
+  entry_match.parser_meta.port_id = 0;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PIPE;
   entry_fwd.next_pipe = mac_pipe;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, DOCA_FLOW_WAIT_FOR_BATCH, &status,
-                                 &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux wire->mac)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux wire->mac)");
 
-  /* port 1 (mlx5_2 SF egress) -> p0 wire; flags=0 flushes the batch */
-  entry_match.parser_meta.port_meta = 1;
+  /* port 1 (mlx5_2 SF egress) -> p0 wire; NO_WAIT flushes the batch */
+  entry_match.parser_meta.port_id = 1;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PORT;
   entry_fwd.port_id = 0;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux sf->wire)");
+  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux sf->wire)");
 
   err = doca_flow_entries_process(port, 0, 10000, 2);
   crash_if_unsuccessful(err, "doca_flow_entries_process (demux)");
@@ -442,14 +491,15 @@ int main(int argc, char **argv) {
    * mlx5_3's egress traffic exits via p1 wire uplink. DOCA HWS root pipes on
    * PF0 override the kernel defaults for PF0 ingress and egress. */
   struct doca_dev *dev = open_and_probe_dev(0,
-      "dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf0");
+      "dv_flow_en=2,fdb_def_rule_en=1,representor=sf0");
 
   configure_and_start_dpdk_port(dev);
 
   initialize_doca_flow();
 
   struct doca_flow_port *port        = port_start(dev);   /* DPDK 0: PF0 uplink */
-  struct doca_flow_port *sf_rep_port = rep_port_start(1); /* DPDK 1: PF0 SF rep (mlx5_2) */
+  struct doca_dev_rep *sf_rep        = open_sf_representor(dev);
+  struct doca_flow_port *sf_rep_port = rep_port_start(1, sf_rep); /* DPDK 1: PF0 SF rep (mlx5_2) */
 
   struct doca_flow_pipe *mac_pipe = create_mac_rewrite_pipe(port);
   struct doca_flow_pipe_entry *mac_entry = add_mac_rewrite_entry(mac_pipe, port);

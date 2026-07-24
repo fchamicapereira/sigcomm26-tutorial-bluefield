@@ -2,7 +2,7 @@
 #
 # Launches the RoCE server + client together and shows a live ttyplot chart of the
 # client's (sender's) throughput. Both are stopped together on exit (Ctrl-C).
-# Requires ./setup_ttyplot.sh to have been run once (builds ./ttyplot/ttyplot).
+# Requires ./setup/setup_ttyplot.sh to have been run once (builds ./ttyplot/ttyplot).
 #
 set -uo pipefail
 
@@ -47,6 +47,11 @@ sudo ip netns exec "$SERVER_NETNS" \
 sleep 2 # let the server reach "waiting for client"
 
 echo "Starting client (live plot)..."
+# Two independent buffering hazards sit between ib_write_bw and ttyplot; either one alone leaves
+# the chart blank until a ~4 KB buffer fills (then it jumps in one burst):
+#   1. ib_write_bw block-buffers stdout when it's a pipe (not a TTY)  -> stdbuf -oL line-buffers it.
+#   2. the default awk here is mawk, which block-buffers its INPUT    -> -W interactive makes mawk
+#      read line-by-line and write unbuffered. (fflush() only affects OUTPUT, so it isn't enough.)
 sudo ip netns exec "$CLIENT_NETNS" \
     stdbuf -oL ib_write_bw \
     -d "$CLIENT_DEV" \
@@ -57,5 +62,5 @@ sudo ip netns exec "$CLIENT_NETNS" \
     --report_gbits \
     --run_infinitely \
     -D "$INTERVAL_SEC" \
-| awk '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
+| awk -W interactive '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
 | ./ttyplot/ttyplot -t "RoCE throughput (client -> server)" -u "Gb/s"

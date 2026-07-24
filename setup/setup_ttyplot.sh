@@ -8,7 +8,9 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/tenox7/ttyplot.git"
-DEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ttyplot"
+# Build into the repo root's ttyplot/ (one level up from this script's setup/ dir): that's
+# where benchmark.sh runs ./ttyplot/ttyplot from and where .gitignore ignores it.
+DEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ttyplot"
 
 echo "== installing build dependencies (ncurses + pkg-config) =="
 sudo apt-get install -y libncurses-dev pkg-config
