@@ -210,8 +210,9 @@ static void initialize_doca_flow(void) {
   err = doca_flow_cfg_set_mode_args(cfg, "switch,hws");
   crash_if_unsuccessful(err, "doca_flow_cfg_set_mode_args");
 
-  err = doca_flow_cfg_set_nr_counters(cfg, NB_COUNTERS);
-  crash_if_unsuccessful(err, "doca_flow_cfg_set_nr_counters");
+  /* Use port-level resource mode (counters allocated per port) */
+  err = doca_flow_cfg_set_resource_mode(cfg, DOCA_FLOW_RESOURCE_MODE_PORT);
+  crash_if_unsuccessful(err, "doca_flow_cfg_set_resource_mode");
 
   err = doca_flow_cfg_set_cb_entry_process(cfg, entry_process_cb);
   crash_if_unsuccessful(err, "doca_flow_cfg_set_cb_entry_process");
@@ -237,6 +238,10 @@ static struct doca_flow_port *port_start(struct doca_dev *dev, uint16_t flow_por
 
   err = doca_flow_port_cfg_set_actions_mem_size(cfg, 16 * DOCA_FLOW_MAX_ENTRY_ACTIONS_MEM_SIZE);
   crash_if_unsuccessful(err, "doca_flow_port_cfg_set_actions_mem_size");
+
+  /* Allocate port-level counter resources */
+  err = doca_flow_port_cfg_set_nr_resources(cfg, DOCA_FLOW_RESOURCE_COUNTER, 128);
+  crash_if_unsuccessful(err, "doca_flow_port_cfg_set_nr_resources (counter)");
 
   struct doca_flow_port *port;
   err = doca_flow_port_start(cfg, &port);
@@ -430,6 +435,7 @@ static struct doca_flow_pipe *create_ecn_mark_pipe(struct doca_flow_port *port, 
 struct ecn_entries {
   struct doca_flow_pipe_entry *ce;          /* CE-marked count */
   struct doca_flow_pipe_entry *passthrough; /* unmarked (missed) count */
+  struct doca_flow_pipe_entry *egress;      /* rep->wire egress count */
 };
 
 static struct ecn_entries add_ecn_entries(struct doca_flow_pipe *pipe, struct doca_flow_port *port) {
@@ -530,7 +536,7 @@ static struct doca_flow_pipe *create_random_sample_pipe(struct doca_flow_port *p
  * wire_ingress_target selects where p0-wire ingress starts: the ECN_MARK/RANDOM_SAMPLE pipe
  * (0 < percent) or the passthrough pipe (--percent 0).
  */
-static void create_port_demux_pipe(struct doca_flow_port *port, struct doca_flow_pipe *wire_ingress_target) {
+static void create_port_demux_pipe(struct doca_flow_port *port, struct doca_flow_pipe *egress_ecn_target, struct doca_flow_pipe *ingress_count_pipe) {
   struct doca_flow_match match = {0};
   struct doca_flow_match match_mask = {0};
   struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_CHANGEABLE}; /* set per entry */
@@ -539,7 +545,7 @@ static void create_port_demux_pipe(struct doca_flow_port *port, struct doca_flow
   struct doca_flow_pipe *pipe;
   doca_error_t err;
 
-  DOCA_LOG_INFO("Creating PORT_DEMUX pipe (wire_ingress_target=%p)", (void *)wire_ingress_target);
+  DOCA_LOG_INFO("Creating PORT_DEMUX pipe (egress_ecn_target=%p)", (void *)egress_ecn_target);
 
   match.parser_meta.port_id = UINT16_MAX;      /* variable — set per entry      */
   match_mask.parser_meta.port_id = UINT16_MAX; /* exact match on source port id */
@@ -569,24 +575,24 @@ static void create_port_demux_pipe(struct doca_flow_port *port, struct doca_flow
   struct entry_batch_status status = {0};
   struct doca_flow_pipe_entry *entry;
 
-  /* port 0 (p0 wire ingress) -> wire_ingress_target; batch, flush with next entry */
+  /* port 0 (p0 wire ingress) -> ingress count -> port 1 (rep); batch, flush with next entry */
   entry_match.parser_meta.port_id = 0;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PIPE;
-  entry_fwd.next_pipe = wire_ingress_target;
-  DOCA_LOG_INFO("Adding demux entry: wire->target (next_pipe=%p)", (void *)wire_ingress_target);
+  entry_fwd.next_pipe = ingress_count_pipe;
+  DOCA_LOG_INFO("Adding demux entry: wire->ingress_count (next_pipe=%p)", (void *)ingress_count_pipe);
   err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
                                        DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux wire->target)");
-  DOCA_LOG_INFO("Adding demux entry: sf->wire");
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux wire->ingress_count)");
+  DOCA_LOG_INFO("Adding demux entry: sf->ecn_mark");
 
-  /* port 1 (mlx5_2 SF egress) -> p0 wire; flags=0 flushes the batch */
+  /* port 1 (mlx5_2 SF egress) -> ECN mark -> p0 wire; flags=0 flushes the batch */
   entry_match.parser_meta.port_id = 1;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
-  entry_fwd.type = DOCA_FLOW_FWD_PORT;
-  entry_fwd.port_id = 0;
+  entry_fwd.type = DOCA_FLOW_FWD_PIPE;
+  entry_fwd.next_pipe = egress_ecn_target;
   err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd, 0, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux sf->wire)");
+  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux sf->ecn_mark)");
   DOCA_LOG_INFO("Processing demux entries...");
 
   err = doca_flow_entries_process(port, 0, 10000, 2);
@@ -594,7 +600,7 @@ static void create_port_demux_pipe(struct doca_flow_port *port, struct doca_flow
   err = (status.failure || status.nb_processed != 2) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS;
   crash_if_unsuccessful(err, "demux entry installation: %u/2 processed", status.nb_processed);
 
-  DOCA_LOG_INFO("Port demux ready: p0 wire->wire_ingress_target, mlx5_2 SF->p0 wire");
+  DOCA_LOG_INFO("Port demux ready: p0 wire->ingress_count->rep, mlx5_2 SF->ecn_mark->wire");
 }
 
 static void print_stats(struct ecn_entries *entries) {
@@ -618,6 +624,15 @@ static void print_stats(struct ecn_entries *entries) {
   /* %g, not a fixed decimal count: --percent now goes well below 0.01%, where %.2f%% would
    * just print "0.00%" and hide whether marking is happening at all. */
   DOCA_LOG_INFO("CE marked: %lu, passthrough: %lu (%.4g%% marked)", ce_pkts, pass_pkts, pct);
+
+  uint64_t egress_pkts = 0;
+  if (entries->egress != NULL) {
+    struct doca_flow_resource_query egress_query;
+    err = doca_flow_resource_query_entry(entries->egress, &egress_query);
+    crash_if_unsuccessful(err, "doca_flow_resource_query_entry egress");
+    egress_pkts = egress_query.counter.total_pkts;
+  }
+  DOCA_LOG_INFO("  ingress (wire->rep): %lu", egress_pkts);
 }
 
 static doca_error_t percent_callback(void *param, void *config) {
@@ -734,42 +749,82 @@ int main(int argc, char **argv) {
   struct doca_flow_port *port = port_start(dev, 0);
   struct doca_flow_port *sf_rep_port = rep_port_start(1, app_cfg.dev_rep);
 
-  /* INGRESS_PASSTHROUGH: miss target of ECN_MARK/RANDOM_SAMPLE, and --percent 0's only route —
-   * non-ECT / already-CE / not-selected / never-selected wire packets still reach the SF rep
+  /* EGRESS_PASSTHROUGH: miss target of ECN_MARK/RANDOM_SAMPLE, and --percent 0's only route —
+   * non-ECT / already-CE / not-selected / never-selected VF egress packets still reach the wire
    * untouched. Counted, so marking can be observed live. */
-  struct doca_flow_pipe *ingress_pass = create_fwd_pipe(port, "INGRESS_PASSTHROUGH", DOCA_FLOW_PIPE_DOMAIN_DEFAULT, false, 1,
+  struct doca_flow_pipe *egress_pass = create_fwd_pipe(port, "EGRESS_PASSTHROUGH", DOCA_FLOW_PIPE_DOMAIN_DEFAULT, false, 0,
                                                         /*with_counter=*/true);
-  struct doca_flow_pipe_entry *pass_entry = add_fwd_entry(ingress_pass, port, "ingress passthrough", /*with_counter=*/true);
+  struct doca_flow_pipe_entry *pass_entry = add_fwd_entry(egress_pass, port, "egress passthrough", /*with_counter=*/true);
 
   /* ECN_MARK only needs to exist if a nonzero percentage can reach it. At --percent 0 nothing
    * ever marks, so there's no pipe to build (entries.ce stays NULL — see print_stats). */
   struct doca_flow_pipe *pipe = NULL;
   struct ecn_entries entries = {0};
   if (app_cfg.random_percent > 0.0) {
-    pipe = create_ecn_mark_pipe(port, ingress_pass, 1);
+    pipe = create_ecn_mark_pipe(port, egress_pass, 0);
     entries = add_ecn_entries(pipe, port);
   }
   entries.passthrough = pass_entry;
 
-  /* RANDOM_SAMPLE pre-filters p0 wire ingress by a HW random value before ECN_MARK ever sees
+  /* RANDOM_SAMPLE pre-filters VF egress by a HW random value before ECN_MARK ever sees
    * it. Only built for 0 < percent < 100 — at 100% everything goes straight to ECN_MARK (no
-   * need to sample first), at 0% everything goes straight to ingress_pass. */
+   * need to sample first), at 0% everything goes straight to egress_pass. */
   uint16_t random_mask = 0;
-  struct doca_flow_pipe *wire_ingress_target;
+  struct doca_flow_pipe *egress_ecn_target;
   if (app_cfg.random_percent >= 100.0) {
-    wire_ingress_target = pipe;
+    egress_ecn_target = pipe;
   } else if (app_cfg.random_percent <= 0.0) {
-    wire_ingress_target = ingress_pass;
+    egress_ecn_target = egress_pass;
   } else {
     random_mask = get_random_mask(app_cfg.random_percent);
-    wire_ingress_target = create_random_sample_pipe(port, pipe, ingress_pass, random_mask);
+    egress_ecn_target = create_random_sample_pipe(port, pipe, egress_pass, random_mask);
   }
 
   /* PORT_DEMUX (root): splits by source port. p0 wire ingress -> wire_ingress_target;
-   * mlx5_2 SF egress (ACKs/CNPs) -> p0 wire so they return to mlx5_3. Replaces the old
-   * EGRESS_FORWARD pipe, which never fired because the DEFAULT-domain root pipe made the
-   * forwarding decision before egress processing. */
-  create_port_demux_pipe(port, wire_ingress_target);
+   * mlx5_2 SF egress (ACKs/CNPs) -> egress_count -> p0 wire so they return to mlx5_3. */
+
+  /* INGRESS_COUNT: non-root DEFAULT domain pipe with counter, forwards to port 1 (rep).
+   * PORT_DEMUX's port_id=0 entry will forward here via FWD_PIPE (wire ingress passthrough). */
+  struct doca_flow_pipe *ingress_count_pipe;
+  {
+    struct doca_flow_match ematch = {0};
+    struct doca_flow_monitor emonitor = {.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED};
+    struct doca_flow_fwd efwd = {.type = DOCA_FLOW_FWD_PORT, .port_id = 1};
+    struct doca_flow_pipe_cfg *ecfg;
+    doca_error_t eerr;
+
+    eerr = doca_flow_pipe_cfg_create(&ecfg, port);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_cfg_create (ingress count)");
+    eerr = doca_flow_pipe_cfg_set_name(ecfg, "INGRESS_COUNT");
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_cfg_set_name (ingress count)");
+    eerr = doca_flow_pipe_cfg_set_type(ecfg, DOCA_FLOW_PIPE_BASIC);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_cfg_set_type (ingress count)");
+    eerr = doca_flow_pipe_cfg_set_domain(ecfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_cfg_set_domain (ingress count)");
+    eerr = doca_flow_pipe_cfg_set_is_root(ecfg, false);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_cfg_set_is_root (ingress count)");
+    eerr = doca_flow_pipe_cfg_set_nr_entries(ecfg, 1);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_cfg_set_nr_entries (ingress count)");
+    eerr = doca_flow_pipe_cfg_set_match(ecfg, &ematch, NULL);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_cfg_set_match (ingress count)");
+    eerr = doca_flow_pipe_cfg_set_monitor(ecfg, &emonitor);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_cfg_set_monitor (ingress count)");
+
+    eerr = doca_flow_pipe_create(ecfg, &efwd, NULL, &ingress_count_pipe);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_create (ingress count)");
+    doca_flow_pipe_cfg_destroy(ecfg);
+
+    struct entry_batch_status estatus = {0};
+    eerr = doca_flow_pipe_basic_add_entry(0, ingress_count_pipe, &ematch, 0, NULL, NULL, NULL, 0, &estatus, &entries.egress);
+    crash_if_unsuccessful(eerr, "doca_flow_pipe_basic_add_entry (ingress count)");
+    eerr = doca_flow_entries_process(port, 0, 10000, 1);
+    crash_if_unsuccessful(eerr, "doca_flow_entries_process (ingress count)");
+    eerr = (estatus.failure || estatus.nb_processed != 1) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS;
+    crash_if_unsuccessful(eerr, "ingress count entry failed");
+    DOCA_LOG_INFO("INGRESS_COUNT pipe ready (DEFAULT, non-root, counter -> rep)");
+  }
+
+  create_port_demux_pipe(port, egress_ecn_target, ingress_count_pipe);
 
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
