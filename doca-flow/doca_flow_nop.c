@@ -18,6 +18,7 @@
 #include <doca_log.h>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
+#include <rte_flow.h>
 #include <rte_mbuf.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -176,6 +177,23 @@ static void configure_and_start_dpdk_port(struct doca_dev *dev) {
       }
     }
 
+    /* Isolated mode: no ingress traffic is delivered to this port's RSS/CPU queues — every
+     * packet is steered by flow rules alone, which is exactly what this program does (it
+     * forwards port-to-port inside the eSwitch and never uses DOCA_FLOW_FWD_RSS).
+     * Must be set after the queues are configured but BEFORE rte_eth_dev_start, per DOCA's own
+     * dpdk_utils.c. Paired with the ",isolated" mode arg in initialize_doca_flow(): together they
+     * stop DOCA Flow from building an internal RSS suffix context in the FDB domain at port-start.
+     * That context is unnecessary here, and on BlueField firmware that only permits RSS actions on
+     * ingress it makes doca_flow_port_start fail outright with
+     * "RSS action supported for ingress only". */
+    struct rte_flow_error flow_err = {0};
+    ret = rte_flow_isolate(port_id, 1, &flow_err);
+    if (ret < 0) {
+      DOCA_LOG_CRIT("rte_flow_isolate port %u failed (errno %d): %s", port_id, -ret,
+                    flow_err.message ? flow_err.message : "no details");
+      exit(EXIT_FAILURE);
+    }
+
     ret = rte_eth_dev_start(port_id);
     if (ret < 0) {
       DOCA_LOG_CRIT("rte_eth_dev_start port %u failed (errno %d)", port_id, -ret);
@@ -194,8 +212,10 @@ static void initialize_doca_flow(void) {
   err = doca_flow_cfg_set_pipe_queues(cfg, NB_QUEUES);
   crash_if_unsuccessful(err, "doca_flow_cfg_set_pipe_queues");
 
-  // switch mode: traffic forwarded between eSwitch ports; no CPU RSS queues needed
-  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws");
+  // switch mode: traffic forwarded between eSwitch ports; no CPU RSS queues needed.
+  // "isolated" makes that explicit to DOCA Flow so it skips the internal FDB RSS suffix context
+  // (see rte_flow_isolate above) — DOCA's own flow_switch sample uses "switch,hws,isolated".
+  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws,isolated");
   crash_if_unsuccessful(err, "doca_flow_cfg_set_mode_args");
 
   err = doca_flow_cfg_set_nr_counters(cfg, NB_COUNTERS);
