@@ -35,13 +35,15 @@ ENV LANG=C.UTF-8
 
 # The devel base already provides meson/ninja/gcc/pkg-config/git and dpacc.
 # We add: patch (for the Part IV PCC patch step, not in the base image), libbsd-dev
-# (optional dependency picked up by meson.build), python3-pyelftools (used by dpacc/DPDK
-# when rebuilding the DPA algo), tmux (run server + client side by side), and sudo (the
-# tutorial scripts call it for their privileged steps — see the ubuntu user setup below).
+# (optional dependency picked up by meson.build), libpcap-dev (doca_flow_mirror writes captured
+# packets to a .pcap and links -lpcap), python3-pyelftools (used by dpacc/DPDK when rebuilding the
+# DPA algo), tmux (run server + client side by side), and sudo (the tutorial scripts call it for
+# their privileged steps — see the ubuntu user setup below).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     patch \
     libbsd-dev \
+    libpcap-dev \
     python3-pyelftools \
     tmux \
     sudo \
@@ -54,7 +56,7 @@ WORKDIR /workspace
 # git-ignored doca-pcc-ecn/app/ out of the build context).
 COPY . /workspace
 
-# Build the three DOCA Flow programs (doca_flow_nop / _mac / _ecn). This is a
+# Build the DOCA Flow programs (doca_flow_nop / _mac / _ecn / _mirror). This is a
 # toolchain smoke-test; the resulting binaries need the real DPU to run. The
 # DOCA PCC part is left as a runtime step (it copies and patches
 # /opt/mellanox/doca/applications, which is git-ignored — see the README).
