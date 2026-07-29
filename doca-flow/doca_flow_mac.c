@@ -109,6 +109,17 @@ static doca_error_t initialize_dpdk(int argc, char **argv) {
   return DOCA_SUCCESS;
 }
 
+/*
+ * SF number of the receiver-side Scalable Function — the N in the "en3f0pf0sfN" representor
+ * netdev, and in the "representor=sfN" mlx5 probe arg built below. Override with --sf-num.
+ *
+ * Default 0 matches the tutorial DPU (en3f0pf0sf0 -> mlx5_2). Other DPUs number their SFs
+ * differently: `sudo mlnx-sf -a show` might report en3f0pf0sf2/sf3, in which case the receiver
+ * SF is --sf-num 2. Probing a number that does not exist yields no representor ethdev at all
+ * (see find_sf_representor_port_id).
+ */
+static uint32_t g_sf_num = 0;
+
 /* Open the Nth DOCA device and probe it into DPDK with caller-supplied args. */
 static struct doca_dev *open_and_probe_dev(uint32_t index, const char *probe_args) {
   struct doca_devinfo **devinfo_list;
@@ -218,9 +229,17 @@ static void initialize_doca_flow(void) {
   crash_if_unsuccessful(err, "doca_flow_cfg_set_pipe_queues");
 
   // switch mode: traffic forwarded between eSwitch ports; no CPU RSS queues needed.
-  // "isolated" makes that explicit to DOCA Flow so it skips the internal FDB RSS suffix context
-  // (see rte_flow_isolate above) — DOCA's own flow_switch sample uses "switch,hws,isolated".
-  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws,isolated");
+  // "isolated" keeps ingress traffic off this port's RSS queues (see rte_flow_isolate above) —
+  // DOCA's own flow_switch sample uses "switch,hws,isolated".
+  // "disable_switch_rss" is what actually stops DOCA Flow from building its internal FDB RSS
+  // suffix context at port start. That context is useless to us (we never use DOCA_FLOW_FWD_RSS),
+  // and on BlueField firmware that permits RSS actions on ingress only, creating it makes
+  // doca_flow_port_start fail outright with "RSS action supported for ingress only". "isolated"
+  // alone does NOT suppress it — verified via --sdk-log-level 60, which still showed DOCA build
+  // "rss_htbl_port_0_0" until this token was added.
+  // Both are undocumented in doca_flow.h but are parsed mode-args tokens (see the token table in
+  // libdoca_flow.so alongside "isolated", "expert", "hairpinq_num").
+  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws,isolated,disable_switch_rss");
   crash_if_unsuccessful(err, "doca_flow_cfg_set_mode_args");
 
   err = doca_flow_cfg_set_nr_counters(cfg, NB_COUNTERS);
@@ -260,6 +279,66 @@ static struct doca_flow_port *port_start(struct doca_dev *dev) {
   doca_flow_port_cfg_destroy(cfg);
 
   return port;
+}
+
+static doca_error_t sf_num_callback(void *param, void *config) {
+  (void)config;
+  long v = atol((const char *)param);
+
+  if (v < 0 || v > UINT16_MAX) {
+    DOCA_LOG_ERR("--sf-num must be in [0, %u] (got '%s')", UINT16_MAX, (const char *)param);
+    return DOCA_ERROR_INVALID_VALUE;
+  }
+  g_sf_num = (uint32_t)v;
+  return DOCA_SUCCESS;
+}
+
+static void register_sf_num_param(void) {
+  struct doca_argp_param *param;
+  doca_error_t err;
+
+  err = doca_argp_param_create(&param);
+  crash_if_unsuccessful(err, "doca_argp_param_create (sf-num)");
+  doca_argp_param_set_long_name(param, "sf-num");
+  doca_argp_param_set_description(param,
+                                  "SF number of the receiver-side Scalable Function, i.e. the N in the "
+                                  "'en3f0pf0sfN' representor netdev listed by 'mlnx-sf -a show'. Default: 0");
+  doca_argp_param_set_callback(param, sf_num_callback);
+  doca_argp_param_set_type(param, DOCA_ARGP_TYPE_STRING);
+  err = doca_argp_register_param(param);
+  crash_if_unsuccessful(err, "doca_argp_register_param (sf-num)");
+}
+
+/*
+ * Find the DPDK port id of PF0's SF representor (probed above via "representor=sf0").
+ *
+ * Do NOT assume it is port 1. The probe only yields a representor ethdev if the SF actually
+ * exists on this DPU, and its port id depends on probe order. Ask DPDK which port it flagged as
+ * a representor instead, and fail with something actionable if there is none — otherwise
+ * doca_flow_port_start just reports the opaque "Invalid port_id=1 ... No such device".
+ */
+static uint16_t find_sf_representor_port_id(void) {
+  uint16_t port_id;
+  uint16_t nb_ports = 0;
+
+  RTE_ETH_FOREACH_DEV(port_id) {
+    struct rte_eth_dev_info dev_info = {0};
+    nb_ports++;
+    if (rte_eth_dev_info_get(port_id, &dev_info) < 0) {
+      continue;
+    }
+    if (dev_info.dev_flags != NULL && (*dev_info.dev_flags & RTE_ETH_DEV_REPRESENTOR) != 0) {
+      DOCA_LOG_INFO("SF representor found on DPDK port %u", port_id);
+      return port_id;
+    }
+  }
+
+  DOCA_LOG_CRIT("No SF representor ethdev found (%u DPDK port(s) probed, expected the PF + its SF rep).", nb_ports);
+  DOCA_LOG_CRIT("Probed 'representor=sf%u', so this DPU has no SF numbered %u on PF0.", g_sf_num, g_sf_num);
+  DOCA_LOG_CRIT("Run 'sudo mlnx-sf -a show' and look at the 'Representor netdev: en3f0pf0sf<N>' lines:");
+  DOCA_LOG_CRIT("  - if it lists a different N (e.g. en3f0pf0sf2), re-run with --sf-num <N>;");
+  DOCA_LOG_CRIT("  - if it lists no SF on PF0 at all, create the SFs first (see README, 'Scalable Functions (SFs)').");
+  exit(EXIT_FAILURE);
 }
 
 /* Start an arbitrary DPDK port as a DOCA Flow port (used for SF representors). */
@@ -453,6 +532,7 @@ int main(int argc, char **argv) {
   crash_if_unsuccessful(err, "doca_argp_init");
 
   doca_argp_set_dpdk_program(initialize_dpdk);
+  register_sf_num_param();
 
   err = doca_argp_start(argc, argv);
   crash_if_unsuccessful(err, "doca_argp_start");
@@ -461,15 +541,17 @@ int main(int argc, char **argv) {
    * fdb_def_rule_en=1 keeps the kernel's default FDB rules for PF1 so that
    * mlx5_3's egress traffic exits via p1 wire uplink. DOCA HWS root pipes on
    * PF0 override the kernel defaults for PF0 ingress and egress. */
-  struct doca_dev *dev = open_and_probe_dev(0,
-      "dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf0");
+  char probe_args[128];
+  snprintf(probe_args, sizeof(probe_args), "dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf%u",
+           g_sf_num);
+  struct doca_dev *dev = open_and_probe_dev(0, probe_args);
 
   configure_and_start_dpdk_port(dev);
 
   initialize_doca_flow();
 
   struct doca_flow_port *port        = port_start(dev);   /* DPDK 0: PF0 uplink */
-  struct doca_flow_port *sf_rep_port = rep_port_start(1); /* DPDK 1: PF0 SF rep (mlx5_2) */
+  struct doca_flow_port *sf_rep_port = rep_port_start(find_sf_representor_port_id()); /* PF0 SF rep (mlx5_2) */
 
   struct doca_flow_pipe *mac_pipe = create_mac_rewrite_pipe(port);
   struct doca_flow_pipe_entry *mac_entry = add_mac_rewrite_entry(mac_pipe, port);

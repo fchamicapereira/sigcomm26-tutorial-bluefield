@@ -45,6 +45,7 @@ RUN apt-get update \
     python3-pyelftools \
     tmux \
     sudo \
+    ethtool \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
