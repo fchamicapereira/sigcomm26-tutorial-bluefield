@@ -19,7 +19,7 @@
 #     -v /dev/hugepages:/dev/hugepages \
 #     sigcomm26-tutorial
 #
-FROM nvcr.io/nvidia/doca/doca:devel-3.4.0
+FROM nvcr.io/nvidia/doca/doca:3.2.0-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -59,12 +59,15 @@ RUN apt-get update \
     && ./setup/setup_ttyplot.sh \
     && rm -rf /var/lib/apt/lists/*
 
-# Run the container as the non-root 'ubuntu' user (already in the base image: UID 1000, in the
-# sudo group) with passwordless sudo, so the tutorial scripts — which call sudo for their
-# privileged steps (ip netns / ovs-vsctl / hugepages / running the DOCA programs) — work
-# unchanged inside the container, including setup/setup_roce_loopback.sh. Everything above this
-# line runs as root at build time.
-RUN echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu \
+# Run the container as the non-root 'ubuntu' user (UID 1000) with passwordless sudo, so the
+# tutorial scripts — which call sudo for their privileged steps (ip netns / ovs-vsctl / hugepages /
+# running the DOCA programs) — work unchanged inside the container, including
+# setup/setup_roce_loopback.sh. Everything above this line runs as root at build time.
+#
+# The DOCA 3.4 base (Ubuntu 24.04) ships this user already; the DOCA 3.2 base (Ubuntu 22.04) does
+# NOT, so create it if missing — keeps this Dockerfile working across both DOCA/Ubuntu bases.
+RUN ( id -u ubuntu >/dev/null 2>&1 || useradd -m -u 1000 -s /bin/bash ubuntu ) \
+    && echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu \
     && chmod 0440 /etc/sudoers.d/ubuntu \
     && chmod +x /workspace/docker-entrypoint.sh \
     && chown -R ubuntu:ubuntu /workspace \

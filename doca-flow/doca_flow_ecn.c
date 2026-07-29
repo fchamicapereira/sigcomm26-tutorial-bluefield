@@ -392,9 +392,9 @@ static struct doca_flow_pipe_entry *add_fwd_entry(struct doca_flow_pipe *pipe, s
   match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
   /* dscp_ecn left 0; mask=0x00 means any dscp_ecn matches → catches all IPv4 */
 
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, NULL, with_counter ? &monitor : NULL, NULL,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (%s)", label);
+  err = doca_flow_pipe_add_entry(0, pipe, &match, 0, NULL, with_counter ? &monitor : NULL, NULL,
+                                       DOCA_FLOW_NO_WAIT, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (%s)", label);
 
   err = doca_flow_entries_process(port, 0, 10000, 1);
   crash_if_unsuccessful(err, "doca_flow_entries_process (%s)", label);
@@ -500,9 +500,9 @@ static struct ecn_entries add_ecn_entries(struct doca_flow_pipe *pipe, struct do
   /* Single entry: all IPv4 (dscp_ecn wildcarded by the pipe mask) → CE; NO_WAIT flushes.
    * action_idx 0 selects the (single) action template configured on the pipe. */
   match.outer.ip4.dscp_ecn = 0x00; /* don't-care: pipe match_mask is 0x00 */
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, &actions, &monitor, NULL,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &status, &entries.ce);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry CE");
+  err = doca_flow_pipe_add_entry(0, pipe, &match, 0, &actions, &monitor, NULL,
+                                       DOCA_FLOW_NO_WAIT, &status, &entries.ce);
+  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry CE");
 
   err = doca_flow_entries_process(port, 0, 10000 /* us */, NB_ENTRIES);
   crash_if_unsuccessful(err, "doca_flow_entries_process");
@@ -558,9 +558,9 @@ static struct doca_flow_pipe *create_random_sample_pipe(struct doca_flow_port *p
   crash_if_unsuccessful(err, "doca_flow_pipe_create (random sample)");
   doca_flow_pipe_cfg_destroy(cfg);
 
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, NULL, NULL, NULL, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &status,
+  err = doca_flow_pipe_add_entry(0, pipe, &match, 0, NULL, NULL, NULL, DOCA_FLOW_NO_WAIT, &status,
                                        &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (random sample)");
+  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (random sample)");
 
   err = doca_flow_entries_process(port, 0, 10000, 1);
   crash_if_unsuccessful(err, "doca_flow_entries_process (random sample)");
@@ -628,18 +628,18 @@ static void create_port_demux_pipe(struct doca_flow_port *port, struct doca_flow
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PIPE;
   entry_fwd.next_pipe = wire_ingress_target;
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
-                                       DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux wire->target)");
+  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_WAIT_FOR_BATCH, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux wire->target)");
 
   /* port 1 (mlx5_2 SF egress) -> p0 wire; NO_WAIT flushes the batch */
   entry_match.parser_meta.port_id = 1;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PORT;
   entry_fwd.port_id = 0;
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux sf->wire)");
+  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_NO_WAIT, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux sf->wire)");
 
   err = doca_flow_entries_process(port, 0, 10000, 2);
   crash_if_unsuccessful(err, "doca_flow_entries_process (demux)");
@@ -792,6 +792,13 @@ int main(int argc, char **argv) {
     print_stats(&entries);
   }
 
+  /* Flush each port's pipes before stopping it — mirrors DOCA's canonical stop_doca_flow_ports
+   * (flow_common.c). Our pipes cross-reference via FWD_PIPE (PORT_DEMUX -> RANDOM_SAMPLE ->
+   * ECN_MARK -> INGRESS_PASSTHROUGH), and on DOCA 3.2 doca_flow_port_stop segfaults on Ctrl-C if
+   * those linked pipes are still live (DOCA 3.4's port_stop flushed them internally, so it was
+   * latent there). */
+  doca_flow_port_pipes_flush(sf_rep_port);
+  doca_flow_port_pipes_flush(port);
   doca_flow_port_stop(sf_rep_port);
   doca_flow_port_stop(port);
   doca_flow_destroy();

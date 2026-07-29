@@ -373,9 +373,9 @@ static struct doca_flow_pipe_entry *add_mac_rewrite_entry(struct doca_flow_pipe 
 
   memcpy(actions.outer.eth.dst_mac, RECEIVER_MAC, sizeof(RECEIVER_MAC));
 
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, &actions, &monitor, NULL,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (mac rewrite)");
+  err = doca_flow_pipe_add_entry(0, pipe, &match, 0, &actions, &monitor, NULL,
+                                       DOCA_FLOW_NO_WAIT, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (mac rewrite)");
 
   err = doca_flow_entries_process(port, 0, 10000, 1);
   crash_if_unsuccessful(err, "doca_flow_entries_process (mac rewrite)");
@@ -435,18 +435,18 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PIPE;
   entry_fwd.next_pipe = mac_pipe;
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
-                                       DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux wire->mac)");
+  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_WAIT_FOR_BATCH, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux wire->mac)");
 
   /* port 1 (mlx5_2 SF egress) -> p0 wire; NO_WAIT flushes the batch */
   entry_match.parser_meta.port_id = 1;
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PORT;
   entry_fwd.port_id = 0;
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &status, &entry);
-  crash_if_unsuccessful(err, "doca_flow_pipe_basic_add_entry (demux sf->wire)");
+  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                                       DOCA_FLOW_NO_WAIT, &status, &entry);
+  crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux sf->wire)");
 
   err = doca_flow_entries_process(port, 0, 10000, 2);
   crash_if_unsuccessful(err, "doca_flow_entries_process (demux)");
@@ -517,6 +517,12 @@ int main(int argc, char **argv) {
     print_stats(mac_entry);
   }
 
+  /* Flush each port's pipes before stopping it — mirrors DOCA's canonical stop_doca_flow_ports
+   * (flow_common.c). Our pipes cross-reference via FWD_PIPE (PORT_DEMUX -> MAC_REWRITE), and on
+   * DOCA 3.2 doca_flow_port_stop segfaults on Ctrl-C if those linked pipes are still live (DOCA
+   * 3.4's port_stop flushed them internally, so it was latent there). */
+  doca_flow_port_pipes_flush(sf_rep_port);
+  doca_flow_port_pipes_flush(port);
   doca_flow_port_stop(sf_rep_port);
   doca_flow_port_stop(port);
   doca_flow_destroy();
