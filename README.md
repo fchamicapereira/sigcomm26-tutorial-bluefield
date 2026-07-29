@@ -447,13 +447,47 @@ The build and run steps below assume:
   pristine sample/application sources at `/opt/mellanox/doca/applications` (notably
   `/opt/mellanox/doca/applications/pcc`, the base for Part IV).
 - **`meson` and `ninja` are on `PATH`** (system packages). Together with `dpacc` they are the only
-  tools needed to build both parts **natively on the Arm** — no DOCA devel container is required.
+  tools needed to build both parts **natively on the Arm** — no DOCA devel container is required
+  (though one is provided as an alternative — see below).
 - **`perftest` (`ib_write_bw`) and `mlxconfig`/`mlxfwreset` (MFT)** are installed for driving RoCE
   traffic and for the firmware NV-config step above.
 - Hugepages are reserved (DPDK/DPA programs — the `doca-flow` programs and `doca_pcc` — need them). This is
   done for you by [`setup_roce_loopback.sh`](setup_roce_loopback.sh)
   (`dpdk-hugepages.py --reserve 4G`); it does not persist across reboots, so re-run
   `setup_roce_loopback.sh` after every boot/power-cycle.
+
+## Optional: run the whole tutorial in a container
+
+If you would rather not build against the DPU's own DOCA install — or want a disposable,
+reproducible environment — [`run_container.sh`](run_container.sh) builds the image described by
+the [`Dockerfile`](Dockerfile) and drops you into a shell inside it:
+
+```bash
+./run_container.sh
+```
+
+The base is `nvcr.io/nvidia/doca/doca:2.9.1-devel` — the same DOCA release as the DPU
+(`2.9.1008`), which matters because the `doca-flow` sources here target the 2.9 Flow API and the
+Part IV DPA algo is loaded by the host's driver/firmware stack. (The `doca-3.2` and `doca-3.4`
+branches carry this same setup ported to those newer releases.)
+
+What you get:
+
+- The three `doca-flow` programs are **already built** at `/workspace/build/doca-flow/`, and
+  `ttyplot` at `/workspace/ttyplot/ttyplot` — both compiled at image-build time.
+- The container runs as the `ubuntu` user with **passwordless sudo**, so every script in this repo
+  (`setup_roce_loopback.sh`, `run_server.sh`, `run_client.sh`, `benchmark.sh`) works unchanged.
+- It starts `--privileged --net=host` with `/dev/infiniband`, `/dev/hugepages` and
+  `/run/openvswitch` bind-mounted, so the DPU hardware is fully reachable from inside.
+- [`docker-entrypoint.sh`](docker-entrypoint.sh) runs `setup_roce_loopback.sh` on start, so the
+  per-boot RoCE loopback is already up when the shell appears. `ns0`/`ns1` are created **inside**
+  the container's network namespace and disappear with it, so nothing leaks onto the host. Skip
+  this step with `docker run -e SKIP_ROCE_SETUP=1 ...` if you only want to build.
+
+The Part IV PCC build stays a **runtime** step inside the container, exactly as documented below —
+run the same commands from `Building and running DOCA PCC (Part IV)`. One difference from the DPU:
+in the container `VERSION` already sits inside `/opt/mellanox/doca/applications/`, so the tree
+copies over complete and `meson setup` needs no extra help.
 
 # Building the DOCA Flow programs
 

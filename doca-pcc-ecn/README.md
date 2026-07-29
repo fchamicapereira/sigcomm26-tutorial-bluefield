@@ -9,6 +9,8 @@ disabled. ~40 lines against one file.
 | file | what |
 |---|---|
 | `pureecn_dcqcn.patch` | The patch — clean 4-hunk unified diff vs the stock DOCA PCC `rtt_template.c`. |
+| `build.sh` | One-shot clean build: copies the DOCA app tree to `app/`, applies the patch, runs meson+ninja. |
+| `run.sh` | Launches the built controller on the RP (`sudo doca_pcc -d mlx5_1 -l 50`). |
 | `doca_pcc_guide.md` | How it works: host↔DPA split, the event loop, and **how the rate is computed and injected into the NIC**. |
 | `doca_pcc_findings.md` | Bring-up runbook: firmware prerequisite, device map, operational gotchas, verified results. |
 | `tune_ecn.py` | Sweeps the controller knobs (`tune_ecn.py <dec_permille> <ai_shift> <gate>`; rebuild per value). |
@@ -23,6 +25,19 @@ disabled. ~40 lines against one file.
 - A switch between them with **ECN/WRED enabled on the lossless RoCE queue** (DSCP 26 → TC3/Q3).
 
 ## Apply + build
+
+Use the scripts — [`build.sh`](build.sh) does the whole thing (clean rebuild every time), and
+[`run.sh`](run.sh) starts the result on the RP:
+
+```bash
+./build.sh          # => doca-pcc-ecn/app/build/pcc/doca_pcc
+./run.sh            # => sudo doca_pcc -d mlx5_1 -l 50
+```
+
+Both work natively on the Arm *and* inside the tutorial devel container (see the top-level
+[`Dockerfile`](../Dockerfile)); set `DOCA=/path` if your install prefix is not `/opt/mellanox/doca`.
+The original manual sequence, for reference:
+
 ```bash
 cp -a /opt/mellanox/doca/applications ~/doca_devel/applications   # writable copy (/opt is read-only)
 cd ~/doca_devel/applications

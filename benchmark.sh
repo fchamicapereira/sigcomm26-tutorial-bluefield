@@ -18,6 +18,20 @@ INTERVAL_SEC="1"       # -D: seconds between throughput reports
 # Set to "" to disable.
 USE_RDMA_CM="1"
 
+# Two independent buffering hazards sit between ib_write_bw and ttyplot; either one alone leaves
+# the chart stuck on "waiting for data from stdin" until a ~4 KB buffer fills (then it jumps in
+# one burst):
+#   1. ib_write_bw block-buffers stdout when it's a pipe (not a TTY) -> `stdbuf -oL` below.
+#   2. mawk block-buffers its INPUT. `-W interactive` makes mawk read line-by-line and write
+#      unbuffered. (awk's fflush() only affects OUTPUT, so it is not enough on its own.)
+# Which awk you get depends on where you run: the DPU natively has gawk, which already streams
+# and prints a warning if handed -W interactive; the tutorial container (Ubuntu 22.04 minimal,
+# see the Dockerfile) has mawk, which needs the flag. So detect and pass it only to mawk.
+AWK=(awk)
+if [ "$(basename "$(readlink -f "$(command -v awk)")")" = "mawk" ]; then
+  AWK=(awk -W interactive)
+fi
+
 CLEANED_UP=""
 cleanup() {
   [ -n "$CLEANED_UP" ] && return
@@ -57,5 +71,5 @@ sudo ip netns exec "$CLIENT_NETNS" \
     --report_gbits \
     --run_infinitely \
     -D "$INTERVAL_SEC" \
-| awk '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
+| "${AWK[@]}" '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
 | ./ttyplot/ttyplot -t "RoCE throughput (client -> server)" -u "Gb/s"
