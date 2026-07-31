@@ -271,9 +271,13 @@ under our control (this is what lets DOCA Flow intercept and mark packets).
 | PF0 host rep | — | — | `pf0hpf` | Host-side representor of PF0 (unused here) |
 | PF1 host rep | — | — | `pf1hpf` | Host-side representor of PF1 (unused here) |
 
-The two physical ports **p0 and p1 are wired directly to each other with a single 100G DAC
-cable** (loopback). Everything below therefore happens inside one DPU: packets that leave p1
-physically re-enter at p0.
+The MACs above are testbed A's; every other value is the same on any BlueField-3 in DPU mode.
+
+What the tutorial requires of the two physical ports is only that **a frame leaving p1 arrives at
+p0**. Testbed A gets that from a single 100G DAC cable wired straight between them, so everything
+happens inside one DPU. Testbed B has no such cable and instead reaches p0 from p1 across two lab
+leaf switches — measurably just as good (see [Reference testbeds](#reference-testbeds)). Either
+way, packets that leave p1 re-enter at p0, which is all the rest of this README assumes.
 
 ### OVS bridges — the default forwarding path
 
@@ -291,37 +295,73 @@ control):
 netdevs on the switch side (not the same object as `enp3s0f0s0`/`enp3s0f1s0` below, which are the
 SFs' own consumer-side netdevs).
 
-[`setup_roce_loopback.sh`](setup_roce_loopback.sh) creates these bridges and ports idempotently
-(`ovs-vsctl --may-exist ...`), so it's safe to re-run and will re-establish this layout even from
-a box where OVS was never configured.
+[`setup_roce_loopback.sh`](setup_roce_loopback.sh) **deletes every OVS bridge on the DPU** and
+recreates exactly these two. See below for why it imposes the layout rather than adapting to it.
 
 ### Scalable Functions (SFs) — the RoCE endpoints
 
 Two SFs, one per PF, carry the actual RoCE traffic. Each SF's netdev is moved into its own
-**network namespace** so that the RoCE traffic is forced out onto the wire (crossing the DAC cable)
-instead of being delivered locally by the host kernel:
+**network namespace** so that the RoCE traffic is forced out onto the wire (p1 → p0) instead of
+being delivered locally by the host kernel:
 
-| SF (aux dev) | RDMA dev | Netdev (in ns) | Namespace | IP | MAC | Role |
+| SF | RDMA dev | Netdev (in ns) | Representor | Namespace | IP | Role |
 |---|---|---|---|---|---|---|
-| `mlx5_core.sf.2` (on PF0) | `mlx5_2` | `enp3s0f0s0` | `ns0` | `10.0.0.1` | `02:c9:c8:ff:a6:24` | **Receiver / server (NP)** |
-| `mlx5_core.sf.3` (on PF1) | `mlx5_3` | `enp3s0f1s0` | `ns1` | `10.0.0.2` | `02:26:3d:d7:e0:4b` | **Sender / client (RP)** |
+| sfnum 0 on PF0 | `mlx5_2` | `enp3s0f0s0` | `en3f0pf0sf0` | `ns0` | `10.0.0.1` | **Receiver / server (NP)** |
+| sfnum 0 on PF1 | `mlx5_3` | `enp3s0f1s0` | `en3f1pf1sf0` | `ns1` | `10.0.0.2` | **Sender / client (RP)** |
 
-Run [`setup_roce_loopback.sh`](setup_roce_loopback.sh) to build this whole layout: it ensures the
-OVS bridges above exist, reserves hugepages, creates `ns0`/`ns1`, moves each SF's RDMA device and
-netdev into its namespace, assigns the IPs, and pins the sender's neighbor for the receiver
-directly to `mlx5_2`'s real MAC (read dynamically from `enp3s0f0s0`, not hardcoded). **None of
-this survives a reboot or power-cycle, so re-run it after every boot:**
+Run [`setup_roce_loopback.sh`](setup_roce_loopback.sh) to build this whole layout. **None of it
+survives a reboot or power-cycle, so re-run it after every boot:**
 
 ```bash
-./setup_roce_loopback.sh
+sudo ./setup_roce_loopback.sh
 ```
+
+> **The script imposes this layout; it does not discover it.** It deletes every OVS bridge and
+> every SF on both PFs, then creates exactly the two SFs above, rebuilds `ovsbr1`/`ovsbr2`,
+> reserves hugepages, creates the namespaces, and asserts every line of the table before exiting
+> — any deviation is a hard failure, so a run that finishes is a run you can trust. That is
+> deliberate: the *sfnum* of an SF is yours to choose, but its **RDMA device index (`mlx5_N`) is
+> handed out in probe order**, so the only way to reliably land on `mlx5_2`/`mlx5_3` — which
+> `run_server.sh`, `run_client.sh` and every command line in this README hardcode — is to start
+> from zero SFs and create ours in a fixed order. It also means the tutorial never needs a
+> `--sf-num` flag, since the receiver is always sfnum 0.
+>
+> Because it is destructive, a DPU staged for something else loses that staging. For the NVIDIA lab
+> DPU, [`reset_nvidia_dpu_to_original_config.sh`](reset_nvidia_dpu_to_original_config.sh) puts its
+> original layout back (see [Reference testbeds](#reference-testbeds)).
+
+> **Why the SF MACs are derived, not fixed.** Each SF is created with an explicit hardware address
+> (`mlnx-sf -a create -m ...`), because an SF created without one can come up with
+> `hw_addr 00:00:00:00:00:00` — and since the RDMA **node GUID is derived from it**, a zero there
+> breaks RoCE connection setup. That was observed on PF1 of the NVIDIA lab DPU, whose PF0 has a MAC
+> pool configured but whose PF1 does not.
+>
+> The address must not be a *constant*, though: on a DPU whose ports are cabled into a shared
+> fabric rather than to each other, these MACs are visible to every other machine in the same
+> broadcast domain, so a hardcoded value would put duplicate MACs on the VLAN as soon as the
+> tutorial ran on a second DPU in the same lab. The script instead derives each one from that PF
+> uplink's burned-in (globally unique) address by setting the locally-administered bit — stable
+> across re-runs on one box, distinct across boxes:
+>
+> | | p0 → receiver SF | p1 → sender SF |
+> |---|---|---|
+> | Testbed A | `f0:fb:7f:e2:e2:76` → `f2:fb:7f:e2:e2:76` | `f0:fb:7f:e2:e2:77` → `f2:fb:7f:e2:e2:77` |
+> | Testbed B | `5c:25:73:e6:00:d0` → `5e:25:73:e6:00:d0` | `5c:25:73:e6:00:d1` → `5e:25:73:e6:00:d1` |
 
 > **Why namespaces.** They stop the *Linux kernel* from delivering `10.0.0.1 ↔ 10.0.0.2` locally
 > — both IPs sit on this one host, so without isolation the kernel short-circuits them and RoCE
-> never touches the wire. Each SF in its own netns forces the traffic out. The packet then
-> crosses the DAC because **p0 and p1 are independent switchdev eSwitches** — PF1 has no vport
-> for `mlx5_2`, so `ovsbr2` (see above) floods it as unknown-unicast out p1 → DAC → p0
-> *regardless of the destination MAC*. (There is no cross-PF eSwitch shortcut to defeat.)
+> never touches the wire. Each SF in its own netns forces the traffic out. The packet then reaches
+> the wire because **p0 and p1 are independent switchdev eSwitches** — PF1 has no vport for
+> `mlx5_2`, so the frame has nowhere to go inside PF1's domain and `ovsbr2` sends it out p1.
+> (There is no cross-PF eSwitch shortcut to defeat.)
+>
+> **Why `ovsbr2` gets two explicit flows.** Left to its own devices, `ovsbr2` has never seen the
+> receiver's MAC as a *source*, so every frame the sender emits is unknown-unicast and gets
+> **flooded** out every port. On testbed A that is harmless — the only place a flooded frame can go
+> is across the DAC to p0. On testbed B it would flood pod23's entire VLAN at 92 Gb/s, which is
+> antisocial and may trip storm control. The script therefore pins both directions
+> (`dl_dst=<receiver MAC> → p1`, `dl_dst=<sender MAC> → the sender SF`) so the traffic is plain
+> unicast; everything else still falls through to `NORMAL` learning.
 >
 > **Why the real MAC, not a fake one.** An earlier version of this tutorial pinned the sender's
 > neighbor to a made-up, unknown MAC, and had DOCA Flow rewrite it to the real MAC before
@@ -415,6 +455,165 @@ DOCA PCC (Part IV) needs two NV-config knobs:
 > DCQCN** — either a PCC algorithm is loaded and reacting, or nothing reacts, regardless of `-R`.
 > (Not yet confirmed by the one fully decisive test — `USER_PROGRAMMABLE_CC=0` + a full
 > power-cycle — since that would also temporarily break Part IV.)
+
+## Reference testbeds
+
+Everything above describes **testbed A**, the development box. The tutorial is also being brought
+up on **testbed B**, a BlueField-3 in an NVIDIA lab pod, to make sure the exercises don't silently
+depend on one machine's wiring. The two differ in almost every axis that the data path touches, so
+they are worth stating explicitly — most of the portability work in `doca-flow/` exists because of
+a line in this table.
+
+| | **Testbed A** (`bluefield-1`, dev box) | **Testbed B** (`dpu`, NVIDIA lab) |
+|---|---|---|
+| Board | BlueField-3, 2×100G | BlueField-3 **B3220**, 2×200G |
+| BSP / OS release | `bf-bundle-2.9.1-40_24.11-ubuntu-22.04_prod` | `bf-bundle-2.7.0-33_24.04_ubuntu-22.04_prod` |
+| Kernel | `5.15.0-1057-bluefield` | `5.15.0-1042-bluefield` |
+| **DOCA** | **2.9.1** | **2.7.0** (`doca-devel 2.7.0085-1`) |
+| Firmware | `32.43.2402` | `32.41.1000` (PSID `MT_0000000884`) |
+| DOCA/OFED | `24.10-1.1.4` | `24.04-0.6.6` |
+| OVS | `2.9.1-0013-24.11-based-3.3.3` | `2.7.0-0056-24.01-based-2.17.8` |
+| **p0 ↔ p1** | **direct 100G DAC** (FS `Q28-PC03`, 3 m) | **no DAC** — each port goes to a *different* leaf switch |
+| p0 / p1 MAC | `f0:fb:7f:e2:e2:76` / `:77` | `5c:25:73:e6:00:d0` / `:d1` |
+| MTU | 1500 | 1500 |
+| **SF layout _as shipped_** | **one per PF** | **both on PF0** |
+| Receiver SF, as shipped | `pci/0000:03:00.0/229408` → `en3f0pf0sf0` / `enp3s0f0s0` / `mlx5_2` | `pci/0000:03:00.0/229408` → `en3f0pf0sf2` / `enp3s0f0s2` / `mlx5_2` |
+| Sender SF, as shipped | `pci/0000:03:00.1/294944` → `en3f1pf1sf0` / `enp3s0f1s0` / `mlx5_3` | `pci/0000:03:00.0/229409` → `en3f0pf0sf3` / `enp3s0f0s3` / `mlx5_3` |
+| OVS bridges, as shipped | `ovsbr1` (`p0`,`pf0hpf`,`en3f0pf0sf0`), `ovsbr2` (`p1`,`pf1hpf`,`en3f1pf1sf0`) | `host_br` (`pf0hpf`,`en3f0pf0sf2`), `wire_br` (`p0`,`en3f0pf0sf3`); **`p1` and `pf1hpf` in no bridge** |
+| **Build** | native (`ninja -C build`, DOCA 2.9 matches) | **container** — native fails, DOCA 2.7 ships no `doca-common.pc` |
+
+The "as shipped" rows are what each box looks like *before* the tutorial touches it, and they are
+why [`setup_roce_loopback.sh`](setup_roce_loopback.sh) wipes and rebuilds rather than adapting:
+testbed B ships with **both SFs on PF0**, which can never work here, because the sender has to sit
+on PF1 for its traffic to leave on p1 and re-enter at p0 where DOCA Flow marks it. After the script
+runs, **both boxes are identical** — one SF per PF at sfnum 0, `mlx5_2`/`mlx5_3`, `ovsbr1`/`ovsbr2`
+— and every command in this README works unchanged on either.
+
+Nothing about the SF layout is fixed in hardware: SFs are created and destroyed at run time
+(`mlnx-sf`, a wrapper over `devlink port add/del`), their sfnum is chosen by us, and
+`PER_PF_NUM_SF=False(0)` on both boxes means the SF pool is device-wide, so PF1 can host one with
+no NV-config change or power-cycle. None of it survives a reboot.
+| `USER_PROGRAMMABLE_CC` | `True(1)` | **`False(0)`** — Part IV (PCC) will not start until this is flipped |
+| `DPA_AUTHENTICATION` | `False(0)` | `False(0)` |
+| `PER_PF_NUM_SF` / `PF_TOTAL_SF` / `NUM_OF_VFS` | `False(0)` / `0` / `16` | `False(0)` / `0` / `16` |
+
+Both boxes run DPU mode with **both PFs in `switchdev`** (`devlink dev eswitch show pci/0000:03:00.{0,1}`
+→ `mode switchdev inline-mode none encap-mode basic`), so the eSwitch assumptions in
+[Configuration setup](#configuration-setup) hold on either.
+
+### Testbed B: what sits on the wire
+
+Testbed A's two ports are cabled to each other, so "the wire" is a closed 3 m loop. Testbed B's
+ports are cabled into a production-style fabric, and **not to the same switch** — passive LLDP
+capture (`tcpdump -i pN -e 'ether proto 0x88cc'`) shows a different neighbour on each port:
+
+```
+p0:  b0:cf:0e:2b:fd:68  l28-compleaf-1.pod23.m3.pdx01.us.nvidia.com
+p1:  b0:cf:0e:2b:dd:68  l28-compleaf-2.pod23.m3.pdx01.us.nvidia.com
+```
+
+The two leaves nevertheless share one broadcast domain — both leaf routers appear as neighbours on
+`p0`, on `p1` *and* on `oob_net0`:
+
+```
+$ ip -6 neigh show | grep b0:cf
+fe80::b2cf:eff:fe2b:fd50 dev oob_net0 lladdr b0:cf:0e:2b:fd:50 router STALE
+fe80::b2cf:eff:fe2b:dd50 dev oob_net0 lladdr b0:cf:0e:2b:dd:50 router STALE
+fe80::b2cf:eff:fe2b:fd50 dev p1       lladdr b0:cf:0e:2b:fd:50 router STALE
+fe80::b2cf:eff:fe2b:dd50 dev p1       lladdr b0:cf:0e:2b:dd:50 router STALE
+fe80::b2cf:eff:fe2b:fd50 dev wire_br  lladdr b0:cf:0e:2b:fd:50 router STALE
+fe80::b2cf:eff:fe2b:dd50 dev wire_br  lladdr b0:cf:0e:2b:dd:50 router STALE
+```
+
+and **p1 → fabric → p0 is confirmed reachable**. Probe: a macvlan on `p1` in its own netns,
+against an address on `wire_br` (the OVS internal port of the bridge that holds `p0`):
+
+```
+$ sudo ip netns exec l2probe ping -c 4 10.77.77.1
+64 bytes from 10.77.77.1: icmp_seq=1 ttl=64 time=47.5 ms      <- ARP resolution
+64 bytes from 10.77.77.1: icmp_seq=2 ttl=64 time=0.718 ms
+64 bytes from 10.77.77.1: icmp_seq=3 ttl=64 time=0.184 ms
+64 bytes from 10.77.77.1: icmp_seq=4 ttl=64 time=0.157 ms
+4 packets transmitted, 4 received, 0% packet loss
+```
+
+So the p1 → p0 hop the tutorial depends on **does exist on testbed B**; it is just two switch hops
+across a shared lab VLAN instead of a private cable. Two consequences follow:
+
+- **The loopback must not rely on flooding.** `ovsbr2` would otherwise flood the receiver's MAC as
+  unknown-unicast out `p1`, which is harmless on a private DAC but on testbed B sprays every frame
+  across pod23's VLAN at 92 Gb/s. `setup_roce_loopback.sh` pins both directions with explicit
+  OpenFlow rules so the fabric unicasts p1 → leaf-2 → leaf-1 → p0; see
+  [Why `ovsbr2` gets two explicit flows](#scalable-functions-sfs--the-roce-endpoints).
+- **SF MACs must be unique per DPU**, since they are visible to the whole VLAN — hence deriving
+  them from each PF uplink's burned-in address rather than hardcoding.
+- **The uplink netdevs cannot be moved into a network namespace.** `ip link set p1 netns ...` fails
+  with `RTNETLINK answers: Invalid argument` on the mlx5 switchdev uplink; use a macvlan (as above)
+  if you need to probe a port from an isolated namespace.
+
+### Testbed B: building
+
+Testbed B ships **DOCA 2.7**, and a native build fails at configure time — 2.7 does not install the
+pkg-config files `meson.build` looks for:
+
+```
+Run-time dependency doca-common found: NO (tried pkgconfig)
+meson.build:36:0: ERROR: Dependency "doca-common" not found, tried pkgconfig
+```
+
+Use the container instead, which carries DOCA 2.9 userspace regardless of what the DPU ships:
+
+```bash
+./run_container.sh
+```
+
+**DOCA 2.9 userspace drives testbed B's older OFED 24.04 kernel driver without complaint** — the
+HWS pipes build, the SF representor is found, and packets forward. That skew is the thing worth
+knowing: the container does not need a matching host DOCA version.
+
+### Testbed B: validation
+
+The full exercise was run on both boxes after `setup_roce_loopback.sh`, with `ib_write_bw`
+(`-R`, 64 KB writes, 10 s) and `doca_flow_ecn --percent 100`. CNP counters are read from the **PF**
+devices in the default namespace (`mlx5_0` = receiver/NP side, `mlx5_1` = sender/RP side) — the
+SFs' own RDMA devices have no `hw_counters` directory:
+
+| | testbed A (DAC) | testbed B (fabric) |
+|---|---|---|
+| baseline throughput | 92.61 Gb/s | 92.10 Gb/s |
+| baseline `np_cnp_sent` Δ | 0 | 169 |
+| `--percent 100` throughput | 92.61 Gb/s | 92.07 Gb/s |
+| `--percent 100` `np_cnp_sent` Δ | 2,399,569 | 2,413,989 |
+| `--percent 100` `rp_cnp_handled` Δ | 2,399,568 | 2,413,990 |
+| packets CE-marked | 113,053,352 | 113,510,981 |
+
+Two switch hops cost essentially nothing: testbed B tracks testbed A's private DAC to within 0.6%,
+and the marking → CNP loop is unambiguously attributable to the DOCA Flow program (169 → 2.4 M).
+
+> Note for Part IV: testbed B handled 2.4 M CNPs with `USER_PROGRAMMABLE_CC=0` — i.e. with stock
+> DCQCN nominally in charge — and throughput still did not move (92.10 → 92.07 Gb/s). That is a
+> data point against the working explanation in the
+> [`USER_PROGRAMMABLE_CC` gotcha](#firmware-nv-config-pcc-prerequisite) above, which assumed the
+> `=1` setting was what suppressed the stock reaction. It is not conclusive: the default
+> `rpg_gd=11` is a ≈0.05% cut per CNP, which a single QP at line rate may simply absorb.
+
+### Testbed B: handing the DPU back
+
+`setup_roce_loopback.sh` destroys the staging that testbed B ships with. To put it back:
+
+```bash
+sudo ./reset_nvidia_dpu_to_original_config.sh
+```
+
+It recreates NVIDIA's two PF0 SFs with their original sfnums (2 and 3) and hardware addresses
+(`44:38:39:00:00:02` / `:03`, trust on), rebuilds `host_br` and `wire_br`, leaves PF1 empty, and
+verifies each of those before exiting non-zero if anything is off. A **reboot also restores the box
+unconditionally** — SFs, bridges and namespaces are all runtime state — so the script only exists
+to save a reboot.
+
+Note that Part IV (PCC) needs `USER_PROGRAMMABLE_CC=1`, which testbed B does **not** have set. That
+is an NV-config change requiring a real power-cycle, so as it stands testbed B runs Parts I–III (the
+DOCA Flow exercises) but not Part IV.
 
 # Testing the setup
 

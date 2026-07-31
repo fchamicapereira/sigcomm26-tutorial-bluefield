@@ -129,10 +129,11 @@ static doca_error_t initialize_dpdk(int argc, char **argv) {
  * SF number of the receiver-side Scalable Function — the N in the "en3f0pf0sfN" representor
  * netdev, and in the "representor=sfN" mlx5 probe arg built below. Override with --sf-num.
  *
- * Default 0 matches the tutorial DPU (en3f0pf0sf0 -> mlx5_2). Other DPUs number their SFs
- * differently: `sudo mlnx-sf -a show` might report en3f0pf0sf2/sf3, in which case the receiver
- * SF is --sf-num 2. Probing a number that does not exist yields no representor ethdev at all
- * (see find_sf_representor_port_id).
+ * Default 0 is correct on any DPU prepared by setup_roce_loopback.sh, which imposes sfnum 0 on
+ * both PFs precisely so this never has to be passed. The flag is the escape hatch for a DPU whose
+ * SFs were created by hand: `sudo mlnx-sf -a show` might report en3f0pf0sf2/sf3, in which case the
+ * receiver SF is --sf-num 2. Probing a number that does not exist yields no representor ethdev at
+ * all (see find_sf_representor_port_id).
  */
 static uint32_t g_sf_num = 0;
 
