@@ -507,6 +507,11 @@ differing in what (if anything) they do to a packet before delivering it to the 
   to a CPU RSS queue, writing them to a `.pcap`** (`--pcap <file>`, required; `--sample N` captures
   only ~1-in-N packets). Capture is additive — the data path and goodput are unaffected. Full docs:
   [`doca-flow/doca_flow_mirror.README.md`](doca-flow/doca_flow_mirror.README.md).
+- **`doca_flow_ecn_pcap`** — combines `doca_flow_ecn` and `doca_flow_mirror` in **one** PF0 program:
+  CE-marks `--percent` of the traffic **and** captures a copy to a `.pcap` at the same time (so you
+  don't have to fight over PF0 with two programs). `--pcap <file>` (optional — omit for pure
+  ECN-mark mode), `--percent N`, `--sample N`; pcap writing starts paused and toggles with **SPACE**.
+  Full docs: [`doca-flow/doca_flow_ecn_pcap.README.md`](doca-flow/doca_flow_ecn_pcap.README.md).
 
 Initial setup of the build directory:
 
@@ -528,6 +533,7 @@ $ sudo ./doca-flow/doca_flow_nop
 $ sudo ./doca-flow/doca_flow_mac
 $ sudo ./doca-flow/doca_flow_ecn
 $ sudo ./doca-flow/doca_flow_mirror --pcap /tmp/capture.pcap   # + optional --sample N
+$ sudo ./doca-flow/doca_flow_ecn_pcap -- --pcap /tmp/capture.pcap --percent 50 --sample 8   # mark + capture
 ```
 
 # Tutorial exercises

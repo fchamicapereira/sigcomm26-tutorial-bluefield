@@ -28,3 +28,12 @@ executable(DOCA_PREFIX + 'flow_mirror',
 	dependencies : app_dependencies + [pcap_dep],
 	include_directories : app_inc_dirs,
 	install: false)
+
+# flow_ecn_pcap combines ECN marking (flow_ecn) with mirror->RSS->pcap capture (flow_mirror)
+# in one PF0 program, so both run without fighting over the eSwitch. Also links libpcap.
+executable(DOCA_PREFIX + 'flow_ecn_pcap',
+	['doca_flow_ecn_pcap.c'],
+	c_args : base_c_args,
+	dependencies : app_dependencies + [pcap_dep],
+	include_directories : app_inc_dirs,
+	install: false)
