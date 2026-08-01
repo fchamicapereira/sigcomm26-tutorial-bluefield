@@ -672,7 +672,7 @@ branches carry this same setup ported to those newer releases.)
 
 What you get:
 
-- The three `doca-flow` programs are **already built** at `/workspace/build/doca-flow/`, and
+- The four `doca-flow` programs are **already built** at `/workspace/build/doca-flow/`, and
   `ttyplot` at `/workspace/ttyplot/ttyplot` — both compiled at image-build time.
 - The container runs as the `ubuntu` user with **passwordless sudo**, so every script in this repo
   (`setup_roce_loopback.sh`, `run_server.sh`, `run_client.sh`, `benchmark.sh`) works unchanged.
@@ -690,7 +690,7 @@ copies over complete and `meson setup` needs no extra help.
 
 # Building the DOCA Flow programs
 
-`doca-flow/` builds three programs, sharing the same PORT_DEMUX/eSwitch-forwarding scaffold but
+`doca-flow/` builds four programs, sharing the same PORT_DEMUX/eSwitch-forwarding scaffold but
 differing in what (if anything) they do to a packet before delivering it to the receiver's SF:
 
 - **`doca_flow_nop`** — forwards packets untouched, no header-modify action at all. Performance
@@ -702,6 +702,15 @@ differing in what (if anything) they do to a packet before delivering it to the 
   `[0, 100]`, fractional values allowed). `--percent 100` marks everything, `--percent 0` marks
   nothing (both exact); anything in between samples via a HW random field, rounded down to the
   nearest power-of-two fraction. Default: 100.
+- **`doca_flow_mirror`** — forwards every packet to the receiver SF unchanged **and mirrors a copy
+  to a CPU RSS queue, writing them to a `.pcap`** (`--pcap <file>`, required; `--sample N` captures
+  only ~1-in-N packets). Capture is additive — the data path and goodput are unaffected. Full docs:
+  [`doca-flow/doca_flow_mirror.README.md`](doca-flow/doca_flow_mirror.README.md).
+- **`doca_flow_ecn_pcap`** — combines `doca_flow_ecn` and `doca_flow_mirror` in **one** PF0 program:
+  CE-marks `--percent` of the traffic **and** captures a copy to a `.pcap` at the same time (so you
+  don't have to fight over PF0 with two programs). `--pcap <file>` (optional — omit for pure
+  ECN-mark mode), `--percent N`, `--sample N`; pcap writing starts paused and toggles with **SPACE**.
+  Full docs: [`doca-flow/doca_flow_ecn_pcap.README.md`](doca-flow/doca_flow_ecn_pcap.README.md).
 
 Initial setup of the build directory:
 
@@ -722,6 +731,8 @@ Running (pick one):
 $ sudo ./doca-flow/doca_flow_nop
 $ sudo ./doca-flow/doca_flow_mac
 $ sudo ./doca-flow/doca_flow_ecn
+$ sudo ./doca-flow/doca_flow_mirror --pcap /tmp/capture.pcap   # + optional --sample N
+$ sudo ./doca-flow/doca_flow_ecn_pcap -- --pcap /tmp/capture.pcap --percent 50 --sample 8   # mark + capture
 ```
 
 # Tutorial exercises
