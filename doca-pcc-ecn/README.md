@@ -1,16 +1,21 @@
 # doca-pcc-ecn — a pure-ECN (DCQCN-style) congestion controller for DOCA PCC
 
-`pureecn_dcqcn.patch` turns NVIDIA's stock `rtt_template` **DOCA PCC** example into an
-**ECN/CNP-driven** reaction-point controller that runs on the BlueField-3 **DPA**: the send rate is
-driven **only** by CNP (multiplicative decrease) and TX (additive increase); the RTT-based update is
-disabled. ~40 lines against one file.
+A standalone project — real source under `device/` and `host/`, built the same way `doca-flow/` is
+(its own `meson.build`, no runtime vendor-copy step) — that turns NVIDIA's stock `rtt_template`
+**DOCA PCC** sample into an **ECN/CNP-driven** reaction-point controller running on the
+BlueField-3 **DPA**: the send rate is driven **only** by CNP (multiplicative decrease) and TX
+(additive increase); the RTT-based update is disabled.
 
 ## In this directory
 | file | what |
 |---|---|
-| `pureecn_dcqcn.patch` | The patch — clean 4-hunk unified diff vs the stock DOCA PCC `rtt_template.c`. |
-| `build.sh` | One-shot clean build: copies the DOCA app tree to `app/`, applies the patch, runs meson+ninja. |
-| `run.sh` | Launches the built controller on the RP (`sudo doca_pcc -d mlx5_1 -l 50`). |
+| `device/algo/rtt_template.c` | The pure-ECN controller algorithm — derived from NVIDIA's BSD-3-Clause `rtt_template` sample; the CNP/TX/RTT handlers are what changed. |
+| `device/algo/*.h` | Supporting headers (context struct, tunable params, entry-point declarations) — unmodified from NVIDIA's sample. |
+| `device/rp_main.c` | DPA entry point (`doca_pcc_dev_user_algo`/`_init`/`_set_algo_params`) — trimmed from NVIDIA's sample: no NP role, no switch-telemetry, no mailbox, no TX-byte-counter sampling (all unused by this tutorial). |
+| `host/pcc_ecn_rp.c` | The host loader — a from-scratch, ~250-line replacement for NVIDIA's ~800-line multi-mode sample host app, exposing just `-d`/`--device` and `-l`/`--log-level`. |
+| `meson.build` / `dependencies/meson.build` | Build wiring, following the exact same pattern `doca-flow/` uses. |
+| `build_device_code.sh` | Invokes `dpacc` to compile `device/` into the DPA image; our own, much-trimmed version of NVIDIA's `applications/pcc/build_device_code.sh`. |
+| `run.sh` | Launches the built controller on the RP (`sudo doca_pcc_ecn_rp -d mlx5_1 -l 50`). |
 | `doca_pcc_guide.md` | How it works: host↔DPA split, the event loop, and **how the rate is computed and injected into the NIC**. |
 | `doca_pcc_findings.md` | Bring-up runbook: firmware prerequisite, device map, operational gotchas, verified results. |
 | `tune_ecn.py` | Sweeps the controller knobs (`tune_ecn.py <dec_permille> <ai_shift> <gate>`; rebuild per value). |
@@ -24,56 +29,58 @@ disabled. ~40 lines against one file.
   bare-metal host). `REAL_TIME_CLOCK_ENABLE` is **not** required.
 - A switch between them with **ECN/WRED enabled on the lossless RoCE queue** (DSCP 26 → TC3/Q3).
 
-## Apply + build
+## Build
 
-Use the scripts — [`build.sh`](build.sh) does the whole thing (clean rebuild every time), and
+Same as every other program in this repo — from the repo root:
+
+```bash
+meson setup build
+ninja -C build
+# => build/doca-pcc-ecn/doca_pcc_ecn_rp
+```
+
+Works natively on the Arm *and* inside the tutorial devel container (see the top-level
+[`Dockerfile`](../Dockerfile)). `build_device_code.sh` checks what's actually installed (untargeted
+vs per-target `libdoca_pcc_dev*.a`, whether `dpacc` takes `-mcpu`) rather than branching on a DOCA
+version string, so the same source builds against DOCA 2.7 (this tutorial's DPU) or 2.9 (the dev
+container) unchanged — but **build wherever you intend to run**: a DPA image built against a newer
+DOCA's `dpacc`/`libflexio` can be rejected by older firmware at *start* (`Application OS version
+(...) is greater than device OS version (...)`), even though the build itself succeeds. See the
+top-level README's [Building and running DOCA PCC (Part IV)](../README.md#building-and-running-doca-pcc-part-iv)
+section for the full explanation.
+
 [`run.sh`](run.sh) starts the result on the RP:
 
 ```bash
-./build.sh          # => doca-pcc-ecn/app/build/pcc/doca_pcc
-./run.sh            # => sudo doca_pcc -d mlx5_1 -l 50
+./run.sh            # => sudo doca_pcc_ecn_rp -d mlx5_1 -l 50
 ```
 
-Both work natively on the Arm *and* inside the tutorial devel container (see the top-level
-[`Dockerfile`](../Dockerfile)); set `DOCA=/path` if your install prefix is not `/opt/mellanox/doca`.
-The original manual sequence, for reference:
-
+## Run (⚠️ notes below — this is from the original 2×BF3 bring-up; see the top-level README's
+[Combined run](../README.md#building-and-running-doca-pcc-part-iv) for this tutorial's actual
+single-DPU loopback commands, which don't need a separate NP role or `--tclass`)
 ```bash
-cp -a /opt/mellanox/doca/applications ~/doca_devel/applications   # writable copy (/opt is read-only)
-cd ~/doca_devel/applications
-patch -p1 < /path/to/pureecn_dcqcn.patch                          # 1 file, 4 hunks
-
-sudo docker run --rm -v /home/ubuntu/doca_devel:/doca_devel -v /dev/hugepages:/dev/hugepages \
-  --privileged --net=host nvcr.io/nvidia/doca/doca:2.9.1-devel \
-  bash -lc 'cd /doca_devel/applications && rm -rf /doca_devel/build && \
-            meson setup /doca_devel/build -Denable_all_applications=false -Denable_pcc=true && \
-            ninja -C /doca_devel/build'
-# => ~/doca_devel/build/pcc/doca_pcc
-```
-
-## Run  (⚠️ two non-obvious requirements — see notes)
-```bash
-# Receiver (NP):
-sudo timeout 40 stdbuf -oL ~/doca_devel/build/pcc/doca_pcc -d mlx5_1 -np-nt -l 50 > np.log 2>&1
+# Receiver (NP) — not used in this tutorial's single-DPU setup (receiver HW CNP is enough):
+sudo timeout 40 stdbuf -oL build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50 > np.log 2>&1
 
 # Sender (RP) — run FOREGROUND, then drive traffic within the window:
-sudo timeout 40 stdbuf -oL ~/doca_devel/build/pcc/doca_pcc -d mlx5_1 -l 50 > rp.log 2>&1 &
+sudo timeout 40 stdbuf -oL build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50 > rp.log 2>&1 &
 
 # Traffic MUST use -R and --tclass=104:
 ib_write_bw -d mlx5_3 -R -F --report_gbits --tclass=104 -p 18515             # server (NP host)
 ib_write_bw -d mlx5_2 -R -F --report_gbits --tclass=104 -D 20 -p 18515 <ip>  # client (RP host)
 
-grep PURE_ECN rp.log            # rate walking down as CNPs arrive => the loop is live
-sudo pkill -INT -x doca_pcc     # stop gracefully (never SIGKILL: leaves a ghost DPA context)
+grep PURE_ECN rp.log                # rate walking down as CNPs arrive => the loop is live
+sudo pkill -INT -x doca_pcc_ecn_rp  # stop gracefully (never SIGKILL: leaves a ghost DPA context)
 ```
 
 ### Critical notes (each one silently breaks the demo if missed)
 1. **`-R` (rdma_cm) is mandatory.** QP→algo binding is negotiated via RoCE **ECE**; without `-R` the QP
    uses the built-in default algo and your code (algo slot 0) never runs.
-2. **`--tclass=104` (DSCP 26 → Q3) is mandatory.** Default traffic rides a lossy queue with no ECN
-   marking → no CNPs to react to (and go-back-N collapse). Q3 is lossless (PFC) + ECN-marked.
-3. **Run `doca_pcc` in the foreground** and drive traffic during that window. Point it at the uplink
-   **PF** (`mlx5_1`); RoCE traffic uses the **SF** (`mlx5_3`). Stop only with `pkill -INT`.
+2. **`--tclass=104` (DSCP 26 → Q3) is mandatory** on a setup with switch-based WRED (the original
+   2×BF3 testbed). Not needed in this tutorial's single-DPU loopback, where `doca_flow_ecn` marks CE
+   unconditionally regardless of traffic class.
+3. **Run the controller in the foreground** and drive traffic during that window. Point it at the
+   uplink **PF** (`mlx5_1`); RoCE traffic uses the **SF** (`mlx5_3`). Stop only with `pkill -INT`.
 
 ## Tune — the one-line knob
 ```c
@@ -96,6 +103,6 @@ per-CNP cut keeps the queue shallow → fewer NACKs → higher goodput *and* low
 `doca_pcc_ecn_sweep.pdf`.)
 
 ## Revert
-```bash
-patch -R -p1 < /path/to/pureecn_dcqcn.patch    # or: restore rtt_template.c from .bak, then rebuild
-```
+`device/algo/rtt_template.c` is a plain, git-tracked file now (no patch to apply/revert) — use
+normal git history, e.g. `git log -- doca-pcc-ecn/device/algo/rtt_template.c` to see the change, or
+`git checkout <rev> -- doca-pcc-ecn/device/algo/rtt_template.c` to restore an earlier version.

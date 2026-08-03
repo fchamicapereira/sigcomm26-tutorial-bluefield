@@ -25,7 +25,7 @@ and turn it into an **ECN/CNP-driven** controller.
 | Data-plane switch | SONiC `admin@<switch>` (ECN/WRED on the lossless RoCE queue) |
 
 **Device mapping (Arm, switchdev/DPU mode):**
-- Uplink PFs: `mlx5_0` = p0, `mlx5_1` = p1 — **this is where PCC runs** (point `doca_pcc -d mlx5_1`).
+- Uplink PFs: `mlx5_0` = p0, `mlx5_1` = p1 — **this is where PCC runs** (point `doca_pcc_ecn_rp -d mlx5_1`).
 - Data SFs: `mlx5_2` = `enp3s0f0s0` (p0), `mlx5_3` = `enp3s0f1s0` (p1) — **carry the RoCE QPs**
   (perftest uses these). PCC is *global per NIC*: the PF context governs the SF flows. PCC is not
   offered on the SFs themselves.
@@ -101,7 +101,8 @@ Edited the **copy** (`~/doca_devel/applications/...`; `/opt` untouched; `.bak` k
   `PCC_STATS` printf (`doca_pcc_dev_printf` / `doca_pcc_dev_trace_flush`).
 - `algo/rtt_template.c` → the pure-ECN controller + `PURE_ECN`/`PCC_*_TRACE` markers.
 
-The shareable `pureecn_dcqcn.patch` here is the clean, minimal version of the controller change.
+The clean, minimal version of the controller change now lives directly in `device/algo/rtt_template.c`
+in this directory (previously shipped as a separate patch file; it's plain git-tracked source now).
 
 ## 9. Key finding — the custom algo only runs with `-R` (ECE); RTT is NOT firmware-gated
 
@@ -137,13 +138,18 @@ threshold, so CNPs fire steadily and the ECN loop takes over — the point of th
 
 ## 12. Quick reproduce
 
+This tutorial's single-DPU loopback (see the top-level README's
+[Combined run](../README.md#building-and-running-doca-pcc-part-iv)) doesn't need a separate NP role
+or `--tclass` — `doca_flow_ecn` marks CE unconditionally. The commands below are from the original
+2×BF3 bring-up with switch-based WRED, kept for reference:
+
 ```bash
-# Receiver (NP):
-sudo timeout 40 stdbuf -oL ~/doca_devel/build/pcc/doca_pcc -d mlx5_1 -np-nt -l 50 > np.log 2>&1
+# Receiver (NP) — original 2xBF3 setup only; not used in this tutorial's single-DPU loopback:
+sudo timeout 40 stdbuf -oL build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50 > np.log 2>&1
 # Sender (RP), foreground:
-sudo timeout 40 stdbuf -oL ~/doca_devel/build/pcc/doca_pcc -d mlx5_1 -l 50 > rp.log 2>&1 &
+sudo timeout 40 stdbuf -oL build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50 > rp.log 2>&1 &
 # Traffic (MUST use -R and --tclass=104):
 ib_write_bw -d mlx5_3 -R -F --report_gbits --tclass=104 -p 18515              # server (NP host)
 ib_write_bw -d mlx5_2 -R -F --report_gbits --tclass=104 -D 20 -p 18515 <ip>   # client (RP host)
-grep PURE_ECN rp.log ; sudo pkill -INT -x doca_pcc
+grep PURE_ECN rp.log ; sudo pkill -INT -x doca_pcc_ecn_rp
 ```

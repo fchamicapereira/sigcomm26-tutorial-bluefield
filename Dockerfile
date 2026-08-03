@@ -34,14 +34,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 
 # The devel base already provides meson/ninja/gcc/pkg-config/git and dpacc.
-# We add: patch (for the Part IV PCC patch step, not in the base image), libbsd-dev
-# (optional dependency picked up by meson.build), libpcap-dev (doca_flow_mirror writes captured
-# packets to a .pcap and links -lpcap), python3-pyelftools (used by dpacc/DPDK when rebuilding the
-# DPA algo), tmux (run server + client side by side), and sudo (the tutorial scripts call it for
-# their privileged steps — see the ubuntu user setup below).
+# We add: libbsd-dev (optional dependency picked up by meson.build), libpcap-dev (doca_flow_mirror
+# writes captured packets to a .pcap and links -lpcap), python3-pyelftools (used by dpacc/DPDK when
+# rebuilding the DPA algo), tmux (run server + client side by side), and sudo (the tutorial scripts
+# call it for their privileged steps — see the ubuntu user setup below).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    patch \
     libbsd-dev \
     libpcap-dev \
     python3-pyelftools \
@@ -52,14 +50,13 @@ RUN apt-get update \
 
 WORKDIR /workspace
 
-# Bring in the project sources (the .dockerignore keeps build/, env/ and the
-# git-ignored doca-pcc-ecn/app/ out of the build context).
+# Bring in the project sources (the .dockerignore keeps build/ and env/ out of the build context).
 COPY . /workspace
 
-# Build the DOCA Flow programs (doca_flow_nop / _mac / _ecn / _mirror). This is a
-# toolchain smoke-test; the resulting binaries need the real DPU to run. The
-# DOCA PCC part is left as a runtime step (it copies and patches
-# /opt/mellanox/doca/applications, which is git-ignored — see the README).
+# Build everything: the DOCA Flow programs (doca_flow_nop / _mac / _ecn / _mirror /
+# _ecn_pcap) and the DOCA PCC pure-ECN controller (doca_pcc_ecn_rp) -- both are standalone
+# projects under the same top-level meson build now, no separate runtime build step for PCC.
+# This is a toolchain smoke-test; the resulting binaries need the real DPU to run.
 RUN meson setup build && ninja -C build
 
 # Build the ttyplot helper (used by benchmark.sh for the live throughput chart) by running the

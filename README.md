@@ -672,8 +672,9 @@ branches carry this same setup ported to those newer releases.)
 
 What you get:
 
-- The four `doca-flow` programs are **already built** at `/workspace/build/doca-flow/`, and
-  `ttyplot` at `/workspace/ttyplot/ttyplot` — both compiled at image-build time.
+- The five `doca-flow` programs and the Part IV PCC controller (`doca_pcc_ecn_rp`) are **already
+  built** at `/workspace/build/`, and `ttyplot` at `/workspace/ttyplot/ttyplot` — all compiled at
+  image-build time, the same `meson setup build && ninja -C build` used natively on the DPU.
 - The container runs as the `ubuntu` user with **passwordless sudo**, so every script in this repo
   (`setup_roce_loopback.sh`, `run_server.sh`, `run_client.sh`, `benchmark.sh`) works unchanged.
 - It starts `--privileged --net=host` with `/dev/infiniband`, `/dev/hugepages` and
@@ -683,10 +684,13 @@ What you get:
   the container's network namespace and disappear with it, so nothing leaks onto the host. Skip
   this step with `docker run -e SKIP_ROCE_SETUP=1 ...` if you only want to build.
 
-The Part IV PCC build stays a **runtime** step inside the container, exactly as documented below —
-run the same commands from `Building and running DOCA PCC (Part IV)`. One difference from the DPU:
-in the container `VERSION` already sits inside `/opt/mellanox/doca/applications/`, so the tree
-copies over complete and `meson setup` needs no extra help.
+> **Building `doca_pcc_ecn_rp` in this DOCA-2.9 container but running it against older firmware
+> (e.g. testbed B's DOCA-2.7-era DPU) can fail at *start*, not build.** `dpacc`/`libflexio` bake a
+> DPA "application OS version" into the image that has to be no newer than what the firmware
+> supports; a 2.9-built image against 2.7-era firmware fails with `Application OS version (...) is
+> greater than device OS version (...)`, even though the container build above succeeds without
+> error. If you hit that, build natively on the target DPU instead of via the container — see
+> [Building and running DOCA PCC (Part IV)](#building-and-running-doca-pcc-part-iv).
 
 # Building the DOCA Flow programs
 
@@ -779,32 +783,39 @@ here — `fdb_def_rule_en=1` leaves the kernel's default FDB rules in place for 
 
 ## Building and running DOCA PCC (Part IV)
 
-The PCC controller (`doca-pcc-ecn/pureecn_dcqcn.patch`) patches NVIDIA's stock `rtt_template` PCC
-application and builds **natively on the Arm** from the DOCA install (see
-[Requirements and assumptions](#requirements-and-assumptions)):
+`doca-pcc-ecn/` is a standalone project, built the same way `doca-flow/` is — real source files
+checked into this repo (`device/` for the DPA-side algorithm, `host/` for the loader), its own
+`meson.build`/`dependencies/meson.build`, no runtime copy-and-patch step. It's part of the same
+top-level build as everything else:
 
 ```bash
-cd doca-pcc-ecn
-
-# 1. Writable copy of the (read-only) system application tree, into app/ (git-ignored).
-#    /opt ships a prebuilt build/ subdir — drop it so we configure our own from scratch.
-cp -a /opt/mellanox/doca/applications ./app
-rm -rf app/build
-
-# 2. Apply the pure-ECN controller patch (1 file, touches only algo/rtt_template.c):
-patch -p1 -d app < pureecn_dcqcn.patch
-
-# 3. Configure + build. Put dpacc on PATH so build_device_code.sh finds it; ninja invokes it to
-#    compile the DPA (device-side) algo. Patch BEFORE meson setup — the device build target does
-#    not re-trigger on algo edits, so after any algo change reconfigure from a clean build dir.
-cd app
-PATH="/opt/mellanox/doca/tools:$PATH" meson setup build -Denable_all_applications=false -Denable_pcc=true
-PATH="/opt/mellanox/doca/tools:$PATH" ninja -C build
-# => doca-pcc-ecn/app/build/pcc/doca_pcc  (host loader; the patched algo is baked into the DPA image)
+meson setup build
+ninja -C build
+# => build/doca-pcc-ecn/doca_pcc_ecn_rp  (host loader; the DPA algo image is linked in statically)
 ```
 
-Requires the firmware knob (`USER_PROGRAMMABLE_CC=1`, *Current* value) to be live, or `doca_pcc`
-refuses to start — see [Firmware NV-config](#firmware-nv-config-pcc-prerequisite).
+`device/algo/rtt_template.c` is the pure-ECN (DCQCN-style) reaction-point controller — derived from
+NVIDIA's BSD-3-Clause-licensed DOCA PCC `rtt_template` sample, with the CNP/TX/RTT handlers
+rewritten so rate is driven only by CNP (multiplicative decrease) and TX (gated additive increase),
+not RTT. `host/pcc_ecn_rp.c` is a from-scratch, ~250-line loader — NVIDIA's own sample host app
+supports NP role, switch-telemetry, IFA1/IFA2 probes, hop-limit, mailbox, none of which this
+tutorial uses; ours exposes just the two flags `run.sh` needs (`-d`/`--device`, and `-l`/
+`--log-level` which comes for free from `doca_argp`).
+
+Requires the firmware knob (`USER_PROGRAMMABLE_CC=1`, *Current* value) to be live, or
+`doca_pcc_ecn_rp` refuses to start — see [Firmware NV-config](#firmware-nv-config-pcc-prerequisite).
+
+`build_device_code.sh` (our own, much-trimmed version of NVIDIA's `applications/pcc/build_device_code.sh`)
+invokes `dpacc` to compile `device/rp_main.c` + `device/algo/rtt_template.c` into the DPA image.
+It checks what's actually installed rather than branching on a DOCA version string: DOCA 2.7 (this
+tutorial's DPU) ships one untargeted `libdoca_pcc_dev.a` and a `dpacc` that takes no `-mcpu`; DOCA
+2.9 (this repo's dev container) ships per-target `libdoca_pcc_dev_<target>.a` and requires
+`-mcpu=nv-dpa-<target>` to pick one. Both build and run correctly — but **build wherever you intend
+to run**: a DPA image compiled against a newer DOCA's `dpacc`/`libflexio` can be rejected by older
+firmware with `Application OS version (...) is greater than device OS version (...)` even though it
+built without error, since the mismatch is a firmware/toolchain ABI question, not a source
+portability one. On this tutorial's DPU (DOCA 2.7 firmware), build natively — not via
+`./run_container.sh`, which carries DOCA 2.9.
 
 The **device mapping is converged to our single-DPU setup** as follows:
 
@@ -823,7 +834,7 @@ Combined run (start Flow first, then the RP controller, then drive traffic):
 sudo ./build/doca-flow/doca_flow_ecn
 
 # 2. RP PCC controller on PF1 — FOREGROUND, stays Active for the whole window:
-sudo timeout 40 stdbuf -oL ./doca-pcc-ecn/app/build/pcc/doca_pcc -d mlx5_1 -l 50 > rp.log 2>&1 &
+sudo timeout 40 stdbuf -oL ./build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50 > rp.log 2>&1 &
 
 # 3. Drive RoCE traffic. -R (rdma_cm) is MANDATORY: the QP→algo-slot-0 binding is negotiated
 #    via RoCE ECE, which perftest only performs with -R. Without it the custom controller never
@@ -832,8 +843,8 @@ sudo timeout 40 stdbuf -oL ./doca-pcc-ecn/app/build/pcc/doca_pcc -d mlx5_1 -l 50
 sudo ip netns exec ns0 ib_write_bw -d mlx5_2 -R -x 1 -F --report_gbits --run_infinitely -D 1            # server
 sudo ip netns exec ns1 ib_write_bw -d mlx5_3 -R -x 1 -F 10.0.0.1 --report_gbits --run_infinitely -D 1   # client
 
-grep PURE_ECN rp.log            # rate walking down as CNPs arrive => the loop is live
-sudo pkill -INT -x doca_pcc     # stop gracefully (never SIGKILL: leaves a ghost DPA context)
+grep PURE_ECN rp.log              # rate walking down as CNPs arrive => the loop is live
+sudo pkill -INT -x doca_pcc_ecn_rp  # stop gracefully (never SIGKILL: leaves a ghost DPA context)
 ```
 
 > **If no CNPs arrive** (`grep PURE_ECN rp.log` stays empty while `doca_flow_ecn` reports rising CE

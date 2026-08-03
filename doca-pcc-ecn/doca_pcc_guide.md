@@ -39,13 +39,14 @@ handlers never fire.
 
 ## 2. Program structure (device side)
 
-Two source files, compiled by **DPACC** (`dpacc -mcpu=nv-dpa-bf3`) into a DPA program the host loads:
+Two source files, compiled by **DPACC** into a DPA program the host loads (`-mcpu=nv-dpa-bf3` is
+only passed when the installed DOCA's `dpacc` requires it — see `build_device_code.sh`):
 
 | file | role |
 |---|---|
-| `device/rp/rtt_template/rp_rtt_template_dev_main.c` | entry point `doca_pcc_dev_user_algo()`; dispatch by algo-slot |
-| `device/rp/rtt_template/algo/rtt_template.c` | the actual algorithm (per-event handlers) — **this is what we edited** |
-| `device/rp/rtt_template/algo/rtt_template_algo_params.h` | tunable constants (AI, rates, thresholds) |
+| `device/rp_main.c` | entry point `doca_pcc_dev_user_algo()`; dispatch by algo-slot |
+| `device/algo/rtt_template.c` | the actual algorithm (per-event handlers) — **this is what we edited** |
+| `device/algo/rtt_template_algo_params.h` | tunable constants (AI, rates, thresholds) |
 
 ### 2.1 The entry point (per-event, per-flow)
 

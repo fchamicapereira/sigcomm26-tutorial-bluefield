@@ -5,9 +5,5 @@ env
 *.code-workspace
 .vscode
 
-# Git-ignored PCC working tree: a per-run writable copy of
-# /opt/mellanox/doca/applications (see README). Rebuilt inside the container.
-doca-pcc-ecn/app
-
 # Prebuilt ttyplot tree (built by setup_ttyplot.sh when needed)
 ttyplot

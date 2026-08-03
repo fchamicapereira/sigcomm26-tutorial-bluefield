@@ -40,6 +40,7 @@ base_app_inc_dirs = []
 
 app_list = [
 	'doca-flow',
+	'doca-pcc-ecn',
 ]
 
 fs = import('fs')
