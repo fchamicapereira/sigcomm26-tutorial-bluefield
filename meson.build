@@ -40,6 +40,7 @@ base_app_inc_dirs = []
 
 app_list = [
 	'doca-flow',
+	'doca-pcc',
 ]
 
 fs = import('fs')
@@ -77,6 +78,7 @@ foreach APP_NAME : app_list
 	# Resolve driver dependencies (e.g. dpdk)
 	doca_name_to_pkgconfig_name = {
 		'dpdk': 'libdpdk',
+		'flexio': 'libflexio',
 	}
 	app_driver_dep_objects = []
 	foreach driver_dep : app_driver_depends
