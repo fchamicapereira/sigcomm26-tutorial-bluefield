@@ -195,7 +195,13 @@ static void initialize_doca_flow(void) {
 
   err = doca_flow_cfg_set_pipe_queues(cfg, NB_QUEUES);
   crash_if_unsuccessful(err, "doca_flow_cfg_set_pipe_queues");
-  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws");
+  /* disable_switch_rss: same fix doca_flow_ecn/_nop/_mac use (see doca_flow_ecn.c's comment) — it
+   * only skips DOCA Flow's own eager, automatic internal FDB RSS suffix context built at port
+   * start, which some firmware (confirmed on this tutorial's DPU) rejects outright. It does NOT
+   * block this program's own explicit RSS pipe below (create_rss_pipe/setup_capture_mirror) --
+   * that one is properly scoped and works fine once the eager one is out of the way. Without this
+   * flag, doca_flow_port_start fails before we ever get to build our own pipe. */
+  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws,isolated,disable_switch_rss");
   crash_if_unsuccessful(err, "doca_flow_cfg_set_mode_args");
   err = doca_flow_cfg_set_nr_counters(cfg, 2);
   crash_if_unsuccessful(err, "doca_flow_cfg_set_nr_counters");

@@ -12,8 +12,13 @@
  * Every wire IPv4 packet is mirrored to CPU RX queue 0 and written to <pcap>; ~--percent of them
  * are CE-marked (the marked copies show CE in the pcap). Non-IPv4 -> PASSTHROUGH (fwd only).
  *
- * NOTE: uses the plain "switch,hws" mode (RSS capture needs it) — NOT the isolated/disable_switch_rss
- * mode the standalone doca_flow_ecn uses.
+ * NOTE: uses the same "switch,hws,isolated,disable_switch_rss" mode as the standalone doca_flow_ecn
+ * (see its comment for why: some firmware rejects the RSS action support DOCA Flow eagerly builds
+ * into every port's FDB by default unless disable_switch_rss is set — confirmed on this tutorial's
+ * DPU, where even the always-RSS doca_flow_mirror fails identically at port_start). That means the
+ * --pcap capture path here needs its own explicit app-level RSS pipe (create_rss_pipe below) to
+ * work at all, and on firmware with this limitation it WON'T — pure ECN-mark mode (omit --pcap)
+ * still works fine, since it never touches that RSS pipe.
  */
 #include <doca_argp.h>
 #include <doca_dev.h>
@@ -151,7 +156,7 @@ static void initialize_doca_flow(void) {
   struct doca_flow_cfg *cfg; doca_error_t err = doca_flow_cfg_create(&cfg);
   crash_if_unsuccessful(err, "doca_flow_cfg_create");
   err = doca_flow_cfg_set_pipe_queues(cfg, NB_QUEUES); crash_if_unsuccessful(err, "set_pipe_queues");
-  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws"); crash_if_unsuccessful(err, "set_mode_args");
+  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws,isolated,disable_switch_rss"); crash_if_unsuccessful(err, "set_mode_args");
   err = doca_flow_cfg_set_nr_counters(cfg, 4); crash_if_unsuccessful(err, "set_nr_counters");
   err = doca_flow_cfg_set_nr_shared_resource(cfg, MIRROR_ID + 1, DOCA_FLOW_SHARED_RESOURCE_MIRROR);
   crash_if_unsuccessful(err, "set_nr_shared_resource (mirror)");
