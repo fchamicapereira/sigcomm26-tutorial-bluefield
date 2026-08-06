@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Drive the SIGCOMM'26 BlueField-3 tutorial fleet from your laptop.
+
+This is transport and aggregation only, never logic: every verb ships a self-contained bash
+script to each machine over stdin (`ssh <host> bash -s -- <args>`), runs them in parallel, and
+renders one table of results. The scripts next to this file are the real work, and each one is
+independently runnable by hand — which is the fallback for any machine this tool cannot reach.
+
+Machines are named as Tailscale knows them, so there is no ssh_config and no addresses to track.
+Auth is publickey first, falling back to the tutorial account's password, so a machine you never
+ran ssh-copy-id against still works.
+
+Standard library only, on purpose: clone the repo and run it, no venv, no pip.
+
+    ./admin/fleet.py sync                     # every machine in the inventory
+    ./admin/fleet.py sync bf3-ulisbon-1       # just these
+    ./admin/fleet.py sync --force             # discard local modifications on the targets
+    ./admin/fleet.py -h
+"""
+
+import argparse
+import concurrent.futures
+import contextlib
+import dataclasses
+import os
+import pathlib
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+from collections.abc import Iterator
+
+ADMIN_DIR = pathlib.Path(__file__).resolve().parent
+INVENTORY = ADMIN_DIR / "machines.txt"
+RESULTS_DIR = ADMIN_DIR / "results"
+
+# Cloned over HTTPS rather than SSH: the repo is public, and putting deploy keys on a dozen
+# shared lab boxes with a published password would be a bad trade.
+REPO_URL = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield.git"
+BRANCH = "main"
+TUTORIAL_USER = "s26t"
+
+# Set by admin/setup_tutorial_user.sh and handed to the participants anyway, so there is nothing
+# here to protect: hardcoding it means a fresh laptop can drive a fresh fleet with no setup.
+# Keys are still tried first, so machines where you ran ssh-copy-id never see this.
+PASSWORD = "sigcomm26tutorial"
+
+SSH_OPTS = [
+    # No BatchMode: it would switch password auth off entirely, which is exactly the machines we
+    # cannot afford to lose. One prompt only — a second one means the password is wrong, and
+    # retrying it just walks the account into the sshd lockout.
+    "-o", "NumberOfPasswordPrompts=1",
+    "-o", "ConnectTimeout=10",
+    # accept-new, not 'no': a machine whose key genuinely changed should still stop us, but a
+    # first-time connection must not need an interactive prompt we cannot answer unattended.
+    "-o", "StrictHostKeyChecking=accept-new",
+]
+
+DEFAULT_JOBS = 8
+DEFAULT_TIMEOUT = 300
+
+
+@dataclasses.dataclass(frozen=True)
+class Machine:
+    name: str
+    user: str
+    comment: str = ""
+
+
+@dataclasses.dataclass
+class Result:
+    machine: Machine
+    returncode: int | None  # None => timed out before ssh returned
+    output: str
+    data: dict[str, str]
+    elapsed: float
+
+    @property
+    def status(self) -> str:
+        if self.returncode is None:
+            return "TIMEOUT"
+        if self.returncode == 0:
+            return "ok"
+        if self.returncode == 255:
+            return "UNREACHABLE"  # ssh itself failed: down, DNS, auth, host key
+        return "FAIL"
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
+
+    def note(self) -> str:
+        """One line of context for the summary table."""
+        if self.ok:
+            return self.data.get("subject", "")
+        for line in reversed(self.output.splitlines()):
+            line = line.strip()
+            if line:
+                return line
+        return ""
+
+
+def load_inventory(path: pathlib.Path, wanted: list[str]) -> list[Machine]:
+    if not path.exists():
+        sys.exit(f"inventory not found: {path}")
+
+    machines: list[Machine] = []
+    for raw in path.read_text().splitlines():
+        body, _, comment = raw.partition("#")
+        fields = body.split()
+        if not fields:
+            continue
+        name = fields[0]
+        user = fields[1] if len(fields) > 1 else TUTORIAL_USER
+        machines.append(Machine(name, user, comment.strip()))
+
+    if not wanted:
+        return machines
+
+    by_name = {m.name: m for m in machines}
+    unknown = [n for n in wanted if n not in by_name]
+    if unknown:
+        sys.exit(
+            f"not in {path.name}: {', '.join(unknown)}\n"
+            f"known machines: {', '.join(by_name) or '(none)'}"
+        )
+    return [by_name[n] for n in wanted]
+
+
+def parse_emitted(stdout: str) -> dict[str, str]:
+    """Collect the '@@key=value' lines the target-side scripts print."""
+    data: dict[str, str] = {}
+    for line in stdout.splitlines():
+        if line.startswith("@@") and "=" in line:
+            key, _, value = line[2:].partition("=")
+            data[key.strip()] = value.strip()
+    return data
+
+
+@contextlib.contextmanager
+def ssh_environment() -> Iterator[dict[str, str]]:
+    """Yield the environment ssh runs under, able to answer a password prompt unattended.
+
+    ssh only ever takes a password from a terminal or from an SSH_ASKPASS helper — never from
+    stdin, which here is the script we are piping in. So write a throwaway helper into a private
+    directory and point ssh at it; SSH_ASKPASS_REQUIRE=force makes ssh use it even though we do
+    have a terminal. Publickey auth is untouched and still tried first.
+    """
+    with tempfile.TemporaryDirectory(prefix="fleet-askpass-") as tmp:
+        secret = pathlib.Path(tmp, "password")
+        secret.write_text(PASSWORD)
+        secret.chmod(0o600)
+
+        # A local key's passphrase must not be answered with the fleet password: refuse anything
+        # that is not a password prompt and let ssh move on to the next auth method.
+        helper = pathlib.Path(tmp, "askpass")
+        helper.write_text(
+            "#!/bin/sh\n"
+            'case "$1" in *[Pp]assphrase*) exit 1 ;; esac\n'
+            f"cat -- {shlex.quote(str(secret))}\n"
+        )
+        helper.chmod(0o700)
+
+        env = os.environ.copy()
+        env["SSH_ASKPASS"] = str(helper)
+        env["SSH_ASKPASS_REQUIRE"] = "force"
+        yield env
+
+
+def run_script(
+    machine: Machine,
+    script: pathlib.Path,
+    script_args: list[str],
+    timeout: int,
+    dry_run: bool,
+    env: dict[str, str],
+) -> Result:
+    cmd = [
+        "ssh", *SSH_OPTS,
+        f"{machine.user}@{machine.name}",
+        "bash", "-s", "--",
+        *[shlex.quote(a) for a in script_args],
+    ]
+
+    if dry_run:
+        print(f"{machine.name}: {' '.join(cmd)} < {script.name}")
+        return Result(machine, 0, "", {}, 0.0)
+
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=script.read_text(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        returncode: int | None = proc.returncode
+        stdout, stderr = proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        returncode = None
+        stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        stderr += f"\ntimed out after {timeout}s"
+
+    elapsed = time.monotonic() - started
+    output = stdout + stderr
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+    (RESULTS_DIR / f"{machine.name}.log").write_text(output)
+
+    return Result(machine, returncode, output, parse_emitted(stdout), elapsed)
+
+
+def run_fleet(
+    machines: list[Machine],
+    script: pathlib.Path,
+    script_args: list[str],
+    jobs: int,
+    timeout: int,
+    dry_run: bool,
+) -> list[Result]:
+    if not script.exists():
+        sys.exit(f"target-side script not found: {script}")
+
+    results: list[Result] = []
+    with ssh_environment() as env, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        futures = {
+            pool.submit(run_script, m, script, script_args, timeout, dry_run, env): m
+            for m in machines
+        }
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            results.append(result)
+            if not dry_run:
+                print(f"  {result.status:<12} {result.machine.name}  ({result.elapsed:.1f}s)")
+
+    order = {m.name: i for i, m in enumerate(machines)}
+    results.sort(key=lambda r: order[r.machine.name])
+    return results
+
+
+def render_table(results: list[Result], columns: list[tuple[str, str]]) -> None:
+    """columns: (header, key) pairs; key is looked up in Result.data, plus the specials below."""
+    def cell(result: Result, key: str) -> str:
+        if key == "@host":
+            return result.machine.name
+        if key == "@status":
+            return result.status
+        if key == "@note":
+            return result.note()
+        return result.data.get(key, "-")
+
+    headers = [header for header, _ in columns]
+    rows = [[cell(r, key) for _, key in columns] for r in results]
+    widths = [
+        max(len(headers[i]), *(len(row[i]) for row in rows)) if rows else len(headers[i])
+        for i in range(len(columns))
+    ]
+
+    def line(cells: list[str]) -> str:
+        return "  ".join(c.ljust(w) for c, w in zip(cells, widths)).rstrip()
+
+    print()
+    print(line(headers))
+    print(line(["-" * w for w in widths]))
+    for row in rows:
+        print(line(row))
+
+
+def summarize(results: list[Result]) -> int:
+    failed = [r for r in results if not r.ok]
+    print()
+    if failed:
+        print(f"{len(results) - len(failed)}/{len(results)} ok — "
+              f"failures: {', '.join(r.machine.name for r in failed)}")
+        print(f"logs: {RESULTS_DIR}/<machine>.log")
+        return 1
+    print(f"{len(results)}/{len(results)} ok")
+    return 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+    script_args = ["--repo", REPO_URL, "--branch", BRANCH, "--user", TUTORIAL_USER]
+    if args.force:
+        script_args.append("--force")
+
+    print(f"sync: {BRANCH} -> {len(machines)} machine(s)"
+          f"{' (--force: local changes will be discarded)' if args.force else ''}")
+
+    results = run_fleet(
+        machines, ADMIN_DIR / "sync.sh", script_args, args.jobs, args.timeout, args.dry_run
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(results, [
+        ("HOST", "@host"),
+        ("STATUS", "@status"),
+        ("ACTION", "action"),
+        ("SHA", "sha"),
+        ("BRANCH", "branch"),
+        ("NOTE", "@note"),
+    ])
+    return summarize(results)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="admin/fleet.py",
+        description="Drive the SIGCOMM'26 BlueField-3 tutorial fleet.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"inventory: {INVENTORY}",
+    )
+    subparsers = parser.add_subparsers(dest="verb", required=True, metavar="VERB")
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "machines", nargs="*", metavar="MACHINE",
+        help="machines to act on (default: every machine in the inventory)",
+    )
+    common.add_argument("-j", "--jobs", type=int, default=DEFAULT_JOBS,
+                        help=f"machines to work on in parallel (default: {DEFAULT_JOBS})")
+    common.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
+                        help=f"per-machine timeout in seconds (default: {DEFAULT_TIMEOUT})")
+    common.add_argument("--dry-run", action="store_true",
+                        help="print what would run, connect to nothing")
+
+    sync = subparsers.add_parser(
+        "sync", parents=[common],
+        help="clone or update the tutorial repo on each machine",
+        description=(
+            f"Clone {REPO_URL} into ~{TUTORIAL_USER}, or fast-forward it if already present. "
+            "Refuses to touch a tree with local modifications or on the wrong branch, since "
+            "that is usually somebody's exercise work; --force discards it."
+        ),
+    )
+    sync.add_argument("--force", action="store_true",
+                      help="reset --hard to origin/%s, discarding local changes" % BRANCH)
+    sync.set_defaults(func=cmd_sync)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

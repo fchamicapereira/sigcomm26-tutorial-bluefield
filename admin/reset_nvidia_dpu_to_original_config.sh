@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # Restore the NVIDIA lab BlueField-3 ("testbed B", see README "Reference testbeds") to the
-# configuration it ships with, undoing everything setup_roce_loopback.sh does.
+# configuration it ships with, undoing everything ../setup_roce_loopback.sh does.
 #
-# setup_roce_loopback.sh deliberately wipes the DPU's SFs and OVS bridges and rebuilds the layout
+# ../setup_roce_loopback.sh deliberately wipes the DPU's SFs and OVS bridges and rebuilds the layout
 # the tutorial needs (one SF per PF, sfnum 0, ovsbr1/ovsbr2). On a DPU we own that is fine. The
 # NVIDIA lab DPU is *not* ours: it ships staged for NVIDIA's own DOCA walkthrough, which its
 # internal documentation describes as

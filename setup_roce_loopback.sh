@@ -22,7 +22,7 @@
 # state), so re-run after every boot.
 #
 # On a DPU that ships staged for something else, this wipes that staging. For the NVIDIA lab DPU
-# see reset_nvidia_dpu_to_original_config.sh, which puts its original layout back.
+# see admin/reset_nvidia_dpu_to_original_config.sh, which puts its original layout back.
 #
 # Prerequisites: DOCA/MFT under /opt/mellanox, mlnx-sf on PATH, both PFs in switchdev mode.
 

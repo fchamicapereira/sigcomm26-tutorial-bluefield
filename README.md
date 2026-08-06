@@ -327,7 +327,7 @@ sudo ./setup_roce_loopback.sh
 > `--sf-num` flag, since the receiver is always sfnum 0.
 >
 > Because it is destructive, a DPU staged for something else loses that staging. For the NVIDIA lab
-> DPU, [`reset_nvidia_dpu_to_original_config.sh`](reset_nvidia_dpu_to_original_config.sh) puts its
+> DPU, [`admin/reset_nvidia_dpu_to_original_config.sh`](admin/reset_nvidia_dpu_to_original_config.sh) puts its
 > original layout back (see [Reference testbeds](#reference-testbeds)).
 
 > **Why the SF MACs are derived, not fixed.** Each SF is created with an explicit hardware address
@@ -602,7 +602,7 @@ and the marking → CNP loop is unambiguously attributable to the DOCA Flow prog
 `setup_roce_loopback.sh` destroys the staging that testbed B ships with. To put it back:
 
 ```bash
-sudo ./reset_nvidia_dpu_to_original_config.sh
+sudo ./admin/reset_nvidia_dpu_to_original_config.sh
 ```
 
 It recreates NVIDIA's two PF0 SFs with their original sfnums (2 and 3) and hardware addresses
