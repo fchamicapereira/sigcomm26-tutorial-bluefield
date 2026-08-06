@@ -1,0 +1,58 @@
+--- a/pcc/device/rp/rtt_template/algo/rtt_template.c
++++ b/pcc/device/rp/rtt_template/algo/rtt_template.c
+@@ -32,6 +32,14 @@
+ #include "rtt_template_algo_params.h"
+ #include "rtt_template.h"
+ 
++/* ============================================================================
++ *  Pure-ECN (DCQCN-style) congestion controller  --  tutorial add-on
++ *  Rate is driven ONLY by CNP (multiplicative decrease) + TX (additive increase).
++ *  The RTT-based rate update is disabled in rtt_template_handle_roce_rtt() below.
++ *  Tune ECN_CNP_DEC_FACTOR: 800..995  =>  x0.800 .. x0.995 per CNP (x0.90 is the sweet spot).
++ * ==========================================================================*/
++#define ECN_CNP_DEC_FACTOR (((1 << 16) * 900) / 1000) /* x0.90 per CNP, fxp16 */
++
+ #pragma clang diagnostic ignored "-Wunused-parameter"
+ 
+ /* Algorithm parameters are defined in rtt_template_algo_params.h */
+@@ -262,6 +270,12 @@
+ 		}
+ 	}
+ 
++	/* Pure-ECN: gated additive increase (recover when CNPs stop) */
++	{ static uint32_t g_tx_inc = 0;
++	  if ((++g_tx_inc % 1000) == 0) {
++		cur_rate += (AI >> 2);
++		if (cur_rate > RATE_MAX) cur_rate = RATE_MAX;
++	  } }
+ 	/* Update results buffer and context */
+ 	ccctx->cur_rate = cur_rate;
+ 	results->rate = cur_rate;
+@@ -358,7 +372,10 @@
+ 	uint32_t norm_np_rx_rate = (1 << 16);
+ #endif
+ 
+-	cur_rate = algorithm_core(ccctx, rtt, cur_rate, param, is_high_tx_util, norm_np_rx_rate);
++	/* Pure-ECN: RTT is measured & logged but does NOT drive the rate.
++	 * To restore stock RTT/hybrid control, uncomment the algorithm_core() call below. */
++	(void)is_high_tx_util; (void)norm_np_rx_rate; (void)param; (void)algorithm_core;
++	/* cur_rate = algorithm_core(ccctx, rtt, cur_rate, param, is_high_tx_util, norm_np_rx_rate); */
+ 
+ 	ccctx->rtt_req_to_rtt_sent = 1;
+ 	ccctx->cur_rate = cur_rate;
+@@ -382,6 +399,15 @@
+ 						doca_pcc_dev_results_t *results)
+ {
+ 	ccctx->flags.was_cnp = 1;
++	/* Pure-ECN: multiplicative decrease per CNP, floored at MIN_RATE */
++	cur_rate = doca_pcc_dev_fxp_mult(ECN_CNP_DEC_FACTOR, cur_rate);
++	if (cur_rate < MIN_RATE)
++		cur_rate = MIN_RATE;
++	{ static uint32_t g_cnp = 0;              /* optional: observe the loop engaging */
++	  if ((++g_cnp % 500) == 1) {
++		doca_pcc_dev_printf("PURE_ECN cnp=%u rate=%u\n", g_cnp, cur_rate);
++		doca_pcc_dev_trace_flush();
++	  } }
+ 
+ 	/* ###### You can put the code for immediate reaction to CNPs ####### */
+ 	/*
