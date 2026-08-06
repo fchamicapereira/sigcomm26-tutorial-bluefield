@@ -17,6 +17,9 @@ Standard library only, on purpose: clone the repo and run it, no venv, no pip.
     ./admin/fleet.py sync --force             # discard local modifications on the targets
     ./admin/fleet.py doca                     # which DOCA version is each machine running
     ./admin/fleet.py firmware                 # which NIC firmware is each machine running
+    ./admin/fleet.py deps                     # what is each machine missing to build the exercises
+    ./admin/fleet.py deps --install           # install it
+    ./admin/fleet.py pcc-ready                # are the PCC firmware knobs live, staged, or unset
     ./admin/fleet.py -h
 """
 
@@ -61,6 +64,9 @@ SSH_OPTS = [
 
 DEFAULT_JOBS = 8
 DEFAULT_TIMEOUT = 300
+# apt on a machine that has none of this is minutes, not seconds, and every machine shares the
+# uplink; the default would time out a first run.
+INSTALL_TIMEOUT = 1800
 
 
 @dataclasses.dataclass(frozen=True)
@@ -297,7 +303,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
           f"{' (--force: local changes will be discarded)' if args.force else ''}")
 
     results = run_fleet(
-        machines, ADMIN_DIR / "sync.sh", script_args, args.jobs, args.timeout, args.dry_run
+        machines, ADMIN_DIR / "sync.sh", script_args, args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run
     )
     if args.dry_run:
         return 0
@@ -327,7 +333,7 @@ def cmd_doca(args: argparse.Namespace) -> int:
 
     results = run_fleet(
         machines, ADMIN_DIR / "print_doca_version.sh", ["--emit"],
-        args.jobs, args.timeout, args.dry_run,
+        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
     )
     if args.dry_run:
         return 0
@@ -344,6 +350,73 @@ def cmd_doca(args: argparse.Namespace) -> int:
     return summarize(results)
 
 
+def cmd_pcc_ready(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+
+    print(f"pcc-ready: {len(machines)} machine(s)")
+
+    results = run_fleet(
+        machines, ADMIN_DIR / "check_pcc_ready.sh", ["--emit"],
+        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(results, [
+        ("HOST", "@host"),
+        ("STATUS", "@status"),
+        ("USER_PROG_CC", "upcc"),
+        ("DPA_AUTH", "dpa"),
+        ("VERDICT", "verdict"),
+        ("NOTE", "@note"),
+    ])
+
+    # The two verdicts that are not 'ready' cost very different amounts of work, so they are
+    # called out separately rather than lumped into one "not ready" count.
+    for verdict, advice in (
+        ("power-cycle", "already staged — power off, wait ~30s, power on (a reboot will not do)"),
+        ("configure", "needs `mlxconfig set` first, then the power-cycle"),
+    ):
+        hosts = [r.machine.name for r in results if r.data.get("verdict") == verdict]
+        if hosts:
+            print(f"\n{verdict}: {', '.join(hosts)}\n  {advice}")
+
+    return summarize(results)
+
+
+def cmd_deps(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+    script_args = ["--emit"] + (["--install"] if args.install else [])
+
+    print(f"deps: {len(machines)} machine(s)"
+          f"{' (installing)' if args.install else ' (report only — pass --install to act)'}")
+
+    results = run_fleet(
+        machines, ADMIN_DIR / "install_deps.sh", script_args,
+        args.jobs, args.timeout or INSTALL_TIMEOUT, args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(results, [
+        ("HOST", "@host"),
+        ("STATUS", "@status"),
+        ("PRESENT", "present"),
+        ("INSTALLED", "added") if args.install else ("MISSING", "needed"),
+        ("MISSING TOOLS", "tools"),
+        ("NOTE", "@note"),
+    ])
+
+    # DOCA, dpacc, MFT and pyverbs are not ours to install; a machine short of one of them is
+    # short of an exercise, so it has to be said out loud rather than left in a column.
+    short = [r.machine.name for r in results if r.ok and r.data.get("tools", "-") != "-"]
+    if short:
+        print(f"\nnote: DOCA/BSP tooling is missing on {', '.join(short)} — see the MISSING "
+              f"TOOLS column; those come with the DOCA install, not from apt")
+
+    return summarize(results)
+
+
 def cmd_firmware(args: argparse.Namespace) -> int:
     machines = load_inventory(INVENTORY, args.machines)
 
@@ -351,7 +424,7 @@ def cmd_firmware(args: argparse.Namespace) -> int:
 
     results = run_fleet(
         machines, ADMIN_DIR / "print_firmware_version.sh", ["--emit"],
-        args.jobs, args.timeout, args.dry_run,
+        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
     )
     if args.dry_run:
         return 0
@@ -384,8 +457,9 @@ def main() -> int:
     )
     common.add_argument("-j", "--jobs", type=int, default=DEFAULT_JOBS,
                         help=f"machines to work on in parallel (default: {DEFAULT_JOBS})")
-    common.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
-                        help=f"per-machine timeout in seconds (default: {DEFAULT_TIMEOUT})")
+    common.add_argument("--timeout", type=int,
+                        help=f"per-machine timeout in seconds "
+                             f"(default: {DEFAULT_TIMEOUT}, {INSTALL_TIMEOUT} for deps)")
     common.add_argument("--dry-run", action="store_true",
                         help="print what would run, connect to nothing")
 
@@ -426,6 +500,38 @@ def main() -> int:
         ),
     )
     firmware.set_defaults(func=cmd_firmware)
+
+    deps = subparsers.add_parser(
+        "deps", parents=[common],
+        help="report (or with --install, install) the packages the tutorial needs",
+        description=(
+            "Run admin/install_deps.sh on each machine: the build toolchain and libraries the "
+            "doca-*/Dockerfile apt blocks install, plus what this repo's own scripts need, but "
+            "natively on the Arm instead of into a container. Reports by default and touches "
+            "nothing; --install acts, and is idempotent — a machine that already has everything "
+            "is left alone. DOCA, dpacc, MFT and pyverbs are verified and reported, never "
+            "installed: they come from the DOCA/BSP install and the distro's versions conflict "
+            "with it."
+        ),
+    )
+    deps.add_argument("--install", action="store_true",
+                      help="install the missing packages (default: report only)")
+    deps.set_defaults(func=cmd_deps)
+
+    pcc_ready = subparsers.add_parser(
+        "pcc-ready", parents=[common],
+        help="check the firmware NV-config knobs the PCC exercise needs",
+        description=(
+            "Run admin/check_pcc_ready.sh on each machine: are USER_PROGRAMMABLE_CC=1 and "
+            "DPA_AUTHENTICATION=0 live? What counts is mlxconfig's Current column — `mlxconfig "
+            "set` only stages a value, and it goes live when the DPU loses power. The verdict "
+            "says which of the three states a machine is in: 'ready', 'power-cycle' (staged, so "
+            "only a full power-off is left — a reboot does not do it), or 'configure' (mlxconfig "
+            "has to run first). A cell like 0→1 means Current is 0 and a power-cycle makes it 1. "
+            "Reads only; it never stages or resets anything."
+        ),
+    )
+    pcc_ready.set_defaults(func=cmd_pcc_ready)
 
     args = parser.parse_args()
     return args.func(args)
