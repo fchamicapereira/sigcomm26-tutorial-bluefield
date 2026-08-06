@@ -20,27 +20,32 @@
 #   ./print_doca_version.sh          # prints e.g. "2.9", or exits 1 if DOCA is not found
 #   ./print_doca_version.sh -v       # also reports what every source said, on stderr
 #   ./print_doca_version.sh --raw    # print the unnormalized string from the winning source
+#   ./print_doca_version.sh --emit   # print '@@key=value' lines for admin/fleet.py
 #
 set -euo pipefail
 
 usage() {
 	cat <<'EOF'
-Usage: print_doca_version.sh [-v] [--raw]
+Usage: print_doca_version.sh [-v] [--raw|--emit]
 
 Print the DOCA version installed on this machine, normalized to MAJOR.MINOR (e.g. "2.9").
 Exits 1 if no DOCA installation is found.
 
   -v, --verbose   report what every detection source said, on stderr
       --raw       print the unnormalized string from the winning source
+      --emit      print '@@key=value' lines (doca, raw, source) instead of the bare version,
+                  which is what admin/fleet.py parses; supersedes --raw
 EOF
 }
 
 VERBOSE=0
 RAW=0
+EMIT=0
 for arg in "$@"; do
 	case "$arg" in
 		-v|--verbose) VERBOSE=1 ;;
 		--raw)        RAW=1 ;;
+		--emit)       EMIT=1 ;;
 		-h|--help)    usage; exit 0 ;;
 		*)            echo "unknown argument: $arg" >&2; usage >&2; exit 2 ;;
 	esac
@@ -139,7 +144,7 @@ if [ -z "$raw" ]; then
 	exit 1
 fi
 
-if [ "$RAW" -eq 1 ]; then
+if [ "$RAW" -eq 1 ] && [ "$EMIT" -eq 0 ]; then
 	printf '%s\n' "$raw"
 	exit 0
 fi
@@ -148,6 +153,20 @@ version=$(normalize "$raw")
 if [ -z "$version" ]; then
 	echo "ERROR: could not parse a MAJOR.MINOR version out of '$raw'" >&2
 	exit 1
+fi
+
+if [ "$EMIT" -eq 1 ]; then
+	# The function name is an implementation detail; report the source the way a human names it.
+	case "$winner" in
+		from_pkgconfig)    source_name="pkg-config" ;;
+		from_dpkg)         source_name="dpkg" ;;
+		from_version_file) source_name="VERSION" ;;
+		*)                 source_name="$winner" ;;
+	esac
+	printf '@@doca=%s\n'   "$version"
+	printf '@@raw=%s\n'    "$raw"
+	printf '@@source=%s\n' "$source_name"
+	exit 0
 fi
 
 printf '%s\n' "$version"

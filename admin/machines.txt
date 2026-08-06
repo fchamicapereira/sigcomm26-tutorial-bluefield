@@ -1,3 +1,4 @@
 bf3-ulisbon-1
 bf3-ulisbon-2
 bf3-ulisbon-3
+bf3-nvidia-1

@@ -15,6 +15,8 @@ Standard library only, on purpose: clone the repo and run it, no venv, no pip.
     ./admin/fleet.py sync                     # every machine in the inventory
     ./admin/fleet.py sync bf3-ulisbon-1       # just these
     ./admin/fleet.py sync --force             # discard local modifications on the targets
+    ./admin/fleet.py doca                     # which DOCA version is each machine running
+    ./admin/fleet.py firmware                 # which NIC firmware is each machine running
     ./admin/fleet.py -h
 """
 
@@ -208,8 +210,10 @@ def run_script(
     elapsed = time.monotonic() - started
     output = stdout + stderr
 
+    # Per script, not just per machine: a verb that makes several passes would otherwise leave
+    # only the last one's log behind.
     RESULTS_DIR.mkdir(exist_ok=True)
-    (RESULTS_DIR / f"{machine.name}.log").write_text(output)
+    (RESULTS_DIR / f"{machine.name}.{script.stem}.log").write_text(output)
 
     return Result(machine, returncode, output, parse_emitted(stdout), elapsed)
 
@@ -277,7 +281,7 @@ def summarize(results: list[Result]) -> int:
     if failed:
         print(f"{len(results) - len(failed)}/{len(results)} ok — "
               f"failures: {', '.join(r.machine.name for r in failed)}")
-        print(f"logs: {RESULTS_DIR}/<machine>.log")
+        print(f"logs: {RESULTS_DIR}/<machine>.<script>.log")
         return 1
     print(f"{len(results)}/{len(results)} ok")
     return 0
@@ -306,6 +310,61 @@ def cmd_sync(args: argparse.Namespace) -> int:
         ("BRANCH", "branch"),
         ("NOTE", "@note"),
     ])
+    return summarize(results)
+
+
+def warn_if_mixed(results: list[Result], key: str, label: str) -> None:
+    """The fleet is only usable if one set of instructions fits all of it — say so when it isn't."""
+    seen = {r.data[key] for r in results if r.ok and key in r.data}
+    if len(seen) > 1:
+        print(f"\nnote: {label} is not uniform across the fleet — {', '.join(sorted(seen))}")
+
+
+def cmd_doca(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+
+    print(f"doca: {len(machines)} machine(s)")
+
+    results = run_fleet(
+        machines, ADMIN_DIR / "print_doca_version.sh", ["--emit"],
+        args.jobs, args.timeout, args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(results, [
+        ("HOST", "@host"),
+        ("STATUS", "@status"),
+        ("DOCA", "doca"),
+        ("RAW", "raw"),
+        ("SOURCE", "source"),
+        ("NOTE", "@note"),
+    ])
+    warn_if_mixed(results, "doca", "DOCA")
+    return summarize(results)
+
+
+def cmd_firmware(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+
+    print(f"firmware: {len(machines)} machine(s)")
+
+    results = run_fleet(
+        machines, ADMIN_DIR / "print_firmware_version.sh", ["--emit"],
+        args.jobs, args.timeout, args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(results, [
+        ("HOST", "@host"),
+        ("STATUS", "@status"),
+        ("FIRMWARE", "fw"),
+        ("DEVICE", "fw_device"),
+        ("SOURCE", "fw_source"),
+        ("NOTE", "@note"),
+    ])
+    warn_if_mixed(results, "fw", "firmware")
     return summarize(results)
 
 
@@ -342,6 +401,31 @@ def main() -> int:
     sync.add_argument("--force", action="store_true",
                       help="reset --hard to origin/%s, discarding local changes" % BRANCH)
     sync.set_defaults(func=cmd_sync)
+
+    doca = subparsers.add_parser(
+        "doca", parents=[common],
+        help="report the DOCA version installed on each machine",
+        description=(
+            "Run admin/print_doca_version.sh on each machine and tabulate the result. The "
+            "MAJOR.MINOR version is the contract with the per-version source directories, so "
+            "this is the check for whether the fleet can be handed the same instructions. RAW "
+            "and SOURCE show the string the version came from and what reported it."
+        ),
+    )
+    doca.set_defaults(func=cmd_doca)
+
+    firmware = subparsers.add_parser(
+        "firmware", parents=[common],
+        help="report the NIC firmware version of each machine",
+        description=(
+            "Run admin/print_firmware_version.sh on each machine and tabulate the result. This "
+            "is the ConnectX/BlueField firmware — what mlxlink calls 'Firmware Version', not the "
+            "BSP version from bfver. The DPA and PCC exercises depend on firmware NV-config "
+            "knobs and on behaviour that differs between builds, so a fleet on mixed firmware "
+            "will not behave uniformly."
+        ),
+    )
+    firmware.set_defaults(func=cmd_firmware)
 
     args = parser.parse_args()
     return args.func(args)
