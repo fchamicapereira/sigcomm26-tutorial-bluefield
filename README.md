@@ -264,12 +264,12 @@ under our control (this is what lets DOCA Flow intercept and mark packets).
 
 ### PCIe functions and physical ports
 
-| Function | PCI | RDMA dev | Netdev | Role |
-|---|---|---|---|---|
-| PF0 uplink | `0000:03:00.0` | `mlx5_0` | `p0` (MAC `f0:fb:7f:e2:e2:76`) | Port 0 of the DPU — **DOCA Flow ECN runs here** |
-| PF1 uplink | `0000:03:00.1` | `mlx5_1` | `p1` (MAC `f0:fb:7f:e2:e2:77`) | Port 1 of the DPU — **DOCA PCC (RP) runs here** |
-| PF0 host rep | — | — | `pf0hpf` | Host-side representor of PF0 (unused here) |
-| PF1 host rep | — | — | `pf1hpf` | Host-side representor of PF1 (unused here) |
+| Function     | PCI            | RDMA dev | Netdev                         | Role                                            |
+| ------------ | -------------- | -------- | ------------------------------ | ----------------------------------------------- |
+| PF0 uplink   | `0000:03:00.0` | `mlx5_0` | `p0` (MAC `f0:fb:7f:e2:e2:76`) | Port 0 of the DPU — **DOCA Flow ECN runs here** |
+| PF1 uplink   | `0000:03:00.1` | `mlx5_1` | `p1` (MAC `f0:fb:7f:e2:e2:77`) | Port 1 of the DPU — **DOCA PCC (RP) runs here** |
+| PF0 host rep | —              | —        | `pf0hpf`                       | Host-side representor of PF0 (unused here)      |
+| PF1 host rep | —              | —        | `pf1hpf`                       | Host-side representor of PF1 (unused here)      |
 
 The MACs above are testbed A's; every other value is the same on any BlueField-3 in DPU mode.
 
@@ -286,16 +286,16 @@ that provides the "default" forwarding path referenced throughout this README (t
 `fdb_def_rule_en=1` keeps active on whichever PF isn't under a `doca-flow` program's exclusive
 control):
 
-| Bridge | Ports | Covers |
-|---|---|---|
+| Bridge   | Ports                         | Covers                                                                                                                                                                                                                            |
+| -------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ovsbr1` | `p0`, `pf0hpf`, `en3f0pf0sf0` | PF0 — fully bypassed while a `doca-flow` program runs (its root pipe takes absolute hardware priority; verified via zero OVS packet/flow activity on `ovsbr1` during a live test that was actively losing packets one layer down) |
-| `ovsbr2` | `p1`, `pf1hpf`, `en3f1pf1sf0` | PF1 — always active; this is the actual mechanism that gets the sender's traffic onto the wire, since no `doca-flow` program ever touches PF1 |
+| `ovsbr2` | `p1`, `pf1hpf`, `en3f1pf1sf0` | PF1 — always active; this is the actual mechanism that gets the sender's traffic onto the wire, since no `doca-flow` program ever touches PF1                                                                                     |
 
 `en3f0pf0sf0`/`en3f1pf1sf0` are the SFs' host-side **representors**: distinct, always-present
 netdevs on the switch side (not the same object as `enp3s0f0s0`/`enp3s0f1s0` below, which are the
 SFs' own consumer-side netdevs).
 
-[`setup_roce_loopback.sh`](setup_roce_loopback.sh) **deletes every OVS bridge on the DPU** and
+[`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh) **deletes every OVS bridge on the DPU** and
 recreates exactly these two. See below for why it imposes the layout rather than adapting to it.
 
 ### Scalable Functions (SFs) — the RoCE endpoints
@@ -304,16 +304,16 @@ Two SFs, one per PF, carry the actual RoCE traffic. Each SF's netdev is moved in
 **network namespace** so that the RoCE traffic is forced out onto the wire (p1 → p0) instead of
 being delivered locally by the host kernel:
 
-| SF | RDMA dev | Netdev (in ns) | Representor | Namespace | IP | Role |
-|---|---|---|---|---|---|---|
-| sfnum 0 on PF0 | `mlx5_2` | `enp3s0f0s0` | `en3f0pf0sf0` | `ns0` | `10.0.0.1` | **Receiver / server (NP)** |
-| sfnum 0 on PF1 | `mlx5_3` | `enp3s0f1s0` | `en3f1pf1sf0` | `ns1` | `10.0.0.2` | **Sender / client (RP)** |
+| SF             | RDMA dev | Netdev (in ns) | Representor   | Namespace | IP         | Role                       |
+| -------------- | -------- | -------------- | ------------- | --------- | ---------- | -------------------------- |
+| sfnum 0 on PF0 | `mlx5_2` | `enp3s0f0s0`   | `en3f0pf0sf0` | `ns0`     | `10.0.0.1` | **Receiver / server (NP)** |
+| sfnum 0 on PF1 | `mlx5_3` | `enp3s0f1s0`   | `en3f1pf1sf0` | `ns1`     | `10.0.0.2` | **Sender / client (RP)**   |
 
-Run [`setup_roce_loopback.sh`](setup_roce_loopback.sh) to build this whole layout. **None of it
+Run [`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh) to build this whole layout. **None of it
 survives a reboot or power-cycle, so re-run it after every boot:**
 
 ```bash
-sudo ./setup_roce_loopback.sh
+sudo ./admin/local_scripts/setup_roce_loopback.sh
 ```
 
 > **The script imposes this layout; it does not discover it.** It deletes every OVS bridge and
@@ -327,7 +327,7 @@ sudo ./setup_roce_loopback.sh
 > `--sf-num` flag, since the receiver is always sfnum 0.
 >
 > Because it is destructive, a DPU staged for something else loses that staging. For the NVIDIA lab
-> DPU, [`admin/reset_nvidia_dpu_to_original_config.sh`](admin/reset_nvidia_dpu_to_original_config.sh) puts its
+> DPU, [`admin/local_scripts/reset_nvidia_dpu_to_original_config.sh`](admin/local_scripts/reset_nvidia_dpu_to_original_config.sh) puts its
 > original layout back (see [Reference testbeds](#reference-testbeds)).
 
 > **Why the SF MACs are derived, not fixed.** Each SF is created with an explicit hardware address
@@ -380,15 +380,7 @@ DOCA PCC (Part IV) needs two NV-config knobs:
 
 - **`USER_PROGRAMMABLE_CC=1`** (default `0`) — enables the programmable-CC / PCC object. Without it
   `doca_pcc` fails with `PCC CONFIG object is not supported on this device`.
-- **`DPA_AUTHENTICATION=0`** — this is the *factory default*, but a DPU may ship hardened to `1`. With
-  it `1`, the firmware only runs **signed** DPA images and rejects a locally `dpacc`-built one, so
-  *both* our controller **and the stock DOCA `doca_pcc`** fail at startup with
-  `flexio_create_prm_process ... Failed to create PRM process` (syndrome `0x8f333`). We disable it
-  because tutorial participants recompile the DPA algo on every tweak; authenticating each build is a
-  heavyweight, beta, static-link-only signing chain (generate an OEM root CA → install a signed cert
-  container with `mlxdpa`/`flint` → sign the ELF), so it's impractical here — see NVIDIA's
-  [DPA Development](https://networking-docs.nvidia.com/doca/sdk/dpa-development) guide if you do need
-  signed images.
+- **`DPA_AUTHENTICATION=0`** — this is the *factory default*, but a DPU may ship hardened to `1`. With it `1`, the firmware only runs **signed** DPA images and rejects a locally `dpacc`-built one, so *both* our controller **and the stock DOCA `doca_pcc`** fail at startup with `flexio_create_prm_process ... Failed to create PRM process` (syndrome `0x8f333`). We disable it because tutorial participants recompile the DPA algo on every tweak; authenticating each build is a heavyweight, beta, static-link-only signing chain (generate an OEM root CA → install a signed cert container with `mlxdpa`/`flint` → sign the ELF), so it's impractical here — see NVIDIA's [DPA Development](https://networking-docs.nvidia.com/doca/sdk/dpa-development) guide if you do need signed images.
 
 `REAL_TIME_CLOCK_ENABLE` is **not** needed (the RTT loop uses the free-running clock).
 
@@ -464,26 +456,26 @@ depend on one machine's wiring. The two differ in almost every axis that the dat
 they are worth stating explicitly — most of the portability work in `doca-flow/` exists because of
 a line in this table.
 
-| | **Testbed A** (`bluefield-1`, dev box) | **Testbed B** (`dpu`, NVIDIA lab) |
-|---|---|---|
-| Board | BlueField-3, 2×100G | BlueField-3 **B3220**, 2×200G |
-| BSP / OS release | `bf-bundle-2.9.1-40_24.11-ubuntu-22.04_prod` | `bf-bundle-2.7.0-33_24.04_ubuntu-22.04_prod` |
-| Kernel | `5.15.0-1057-bluefield` | `5.15.0-1042-bluefield` |
-| **DOCA** | **2.9.1** | **2.7.0** (`doca-devel 2.7.0085-1`) |
-| Firmware | `32.43.2402` | `32.41.1000` (PSID `MT_0000000884`) |
-| DOCA/OFED | `24.10-1.1.4` | `24.04-0.6.6` |
-| OVS | `2.9.1-0013-24.11-based-3.3.3` | `2.7.0-0056-24.01-based-2.17.8` |
-| **p0 ↔ p1** | **direct 100G DAC** (FS `Q28-PC03`, 3 m) | **no DAC** — each port goes to a *different* leaf switch |
-| p0 / p1 MAC | `f0:fb:7f:e2:e2:76` / `:77` | `5c:25:73:e6:00:d0` / `:d1` |
-| MTU | 1500 | 1500 |
-| **SF layout _as shipped_** | **one per PF** | **both on PF0** |
-| Receiver SF, as shipped | `pci/0000:03:00.0/229408` → `en3f0pf0sf0` / `enp3s0f0s0` / `mlx5_2` | `pci/0000:03:00.0/229408` → `en3f0pf0sf2` / `enp3s0f0s2` / `mlx5_2` |
-| Sender SF, as shipped | `pci/0000:03:00.1/294944` → `en3f1pf1sf0` / `enp3s0f1s0` / `mlx5_3` | `pci/0000:03:00.0/229409` → `en3f0pf0sf3` / `enp3s0f0s3` / `mlx5_3` |
-| OVS bridges, as shipped | `ovsbr1` (`p0`,`pf0hpf`,`en3f0pf0sf0`), `ovsbr2` (`p1`,`pf1hpf`,`en3f1pf1sf0`) | `host_br` (`pf0hpf`,`en3f0pf0sf2`), `wire_br` (`p0`,`en3f0pf0sf3`); **`p1` and `pf1hpf` in no bridge** |
-| **Build** | native (`ninja -C build`, DOCA 2.9 matches) | **container** — native fails, DOCA 2.7 ships no `doca-common.pc` |
+|                            | **Testbed A** (`bluefield-1`, dev box)                                         | **Testbed B** (`dpu`, NVIDIA lab)                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Board                      | BlueField-3, 2×100G                                                            | BlueField-3 **B3220**, 2×200G                                                                          |
+| BSP / OS release           | `bf-bundle-2.9.1-40_24.11-ubuntu-22.04_prod`                                   | `bf-bundle-2.7.0-33_24.04_ubuntu-22.04_prod`                                                           |
+| Kernel                     | `5.15.0-1057-bluefield`                                                        | `5.15.0-1042-bluefield`                                                                                |
+| **DOCA**                   | **2.9.1**                                                                      | **2.7.0** (`doca-devel 2.7.0085-1`)                                                                    |
+| Firmware                   | `32.43.2402`                                                                   | `32.41.1000` (PSID `MT_0000000884`)                                                                    |
+| DOCA/OFED                  | `24.10-1.1.4`                                                                  | `24.04-0.6.6`                                                                                          |
+| OVS                        | `2.9.1-0013-24.11-based-3.3.3`                                                 | `2.7.0-0056-24.01-based-2.17.8`                                                                        |
+| **p0 ↔ p1**                | **direct 100G DAC** (FS `Q28-PC03`, 3 m)                                       | **no DAC** — each port goes to a *different* leaf switch                                               |
+| p0 / p1 MAC                | `f0:fb:7f:e2:e2:76` / `:77`                                                    | `5c:25:73:e6:00:d0` / `:d1`                                                                            |
+| MTU                        | 1500                                                                           | 1500                                                                                                   |
+| **SF layout _as shipped_** | **one per PF**                                                                 | **both on PF0**                                                                                        |
+| Receiver SF, as shipped    | `pci/0000:03:00.0/229408` → `en3f0pf0sf0` / `enp3s0f0s0` / `mlx5_2`            | `pci/0000:03:00.0/229408` → `en3f0pf0sf2` / `enp3s0f0s2` / `mlx5_2`                                    |
+| Sender SF, as shipped      | `pci/0000:03:00.1/294944` → `en3f1pf1sf0` / `enp3s0f1s0` / `mlx5_3`            | `pci/0000:03:00.0/229409` → `en3f0pf0sf3` / `enp3s0f0s3` / `mlx5_3`                                    |
+| OVS bridges, as shipped    | `ovsbr1` (`p0`,`pf0hpf`,`en3f0pf0sf0`), `ovsbr2` (`p1`,`pf1hpf`,`en3f1pf1sf0`) | `host_br` (`pf0hpf`,`en3f0pf0sf2`), `wire_br` (`p0`,`en3f0pf0sf3`); **`p1` and `pf1hpf` in no bridge** |
+| **Build**                  | native (`ninja -C build`, DOCA 2.9 matches)                                    | **container** — native fails, DOCA 2.7 ships no `doca-common.pc`                                       |
 
 The "as shipped" rows are what each box looks like *before* the tutorial touches it, and they are
-why [`setup_roce_loopback.sh`](setup_roce_loopback.sh) wipes and rebuilds rather than adapting:
+why [`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh) wipes and rebuilds rather than adapting:
 testbed B ships with **both SFs on PF0**, which can never work here, because the sender has to sit
 on PF1 for its traffic to leave on p1 and re-enter at p0 where DOCA Flow marks it. After the script
 runs, **both boxes are identical** — one SF per PF at sfnum 0, `mlx5_2`/`mlx5_3`, `ovsbr1`/`ovsbr2`
@@ -578,14 +570,14 @@ The full exercise was run on both boxes after `setup_roce_loopback.sh`, with `ib
 devices in the default namespace (`mlx5_0` = receiver/NP side, `mlx5_1` = sender/RP side) — the
 SFs' own RDMA devices have no `hw_counters` directory:
 
-| | testbed A (DAC) | testbed B (fabric) |
-|---|---|---|
-| baseline throughput | 92.61 Gb/s | 92.10 Gb/s |
-| baseline `np_cnp_sent` Δ | 0 | 169 |
-| `--percent 100` throughput | 92.61 Gb/s | 92.07 Gb/s |
-| `--percent 100` `np_cnp_sent` Δ | 2,399,569 | 2,413,989 |
-| `--percent 100` `rp_cnp_handled` Δ | 2,399,568 | 2,413,990 |
-| packets CE-marked | 113,053,352 | 113,510,981 |
+|                                    | testbed A (DAC) | testbed B (fabric) |
+| ---------------------------------- | --------------- | ------------------ |
+| baseline throughput                | 92.61 Gb/s      | 92.10 Gb/s         |
+| baseline `np_cnp_sent` Δ           | 0               | 169                |
+| `--percent 100` throughput         | 92.61 Gb/s      | 92.07 Gb/s         |
+| `--percent 100` `np_cnp_sent` Δ    | 2,399,569       | 2,413,989          |
+| `--percent 100` `rp_cnp_handled` Δ | 2,399,568       | 2,413,990          |
+| packets CE-marked                  | 113,053,352     | 113,510,981        |
 
 Two switch hops cost essentially nothing: testbed B tracks testbed A's private DAC to within 0.6%,
 and the marking → CNP loop is unambiguously attributable to the DOCA Flow program (169 → 2.4 M).
@@ -602,7 +594,7 @@ and the marking → CNP loop is unambiguously attributable to the DOCA Flow prog
 `setup_roce_loopback.sh` destroys the staging that testbed B ships with. To put it back:
 
 ```bash
-sudo ./admin/reset_nvidia_dpu_to_original_config.sh
+sudo ./admin/local_scripts/reset_nvidia_dpu_to_original_config.sh
 ```
 
 It recreates NVIDIA's two PF0 SFs with their original sfnums (2 and 3) and hardware addresses
@@ -651,7 +643,7 @@ The build and run steps below assume:
 - **`perftest` (`ib_write_bw`) and `mlxconfig`/`mlxfwreset` (MFT)** are installed for driving RoCE
   traffic and for the firmware NV-config step above.
 - Hugepages are reserved (DPDK/DPA programs — the `doca-flow` programs and `doca_pcc` — need them). This is
-  done for you by [`setup_roce_loopback.sh`](setup_roce_loopback.sh)
+  done for you by [`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh)
   (`dpdk-hugepages.py --reserve 4G`); it does not persist across reboots, so re-run
   `setup_roce_loopback.sh` after every boot/power-cycle.
 
@@ -808,13 +800,13 @@ refuses to start — see [Firmware NV-config](#firmware-nv-config-pcc-prerequisi
 
 The **device mapping is converged to our single-DPU setup** as follows:
 
-| Step | Original 2×BF3 testbed | **Our single-DPU DAC loopback** |
-|---|---|---|
-| ECN marking | SONiC switch WRED on DSCP26→Q3 | `doca_flow_ecn` on PF0 (`mlx5_0`) |
-| RP PCC device | `mlx5_1` on the sender host | `mlx5_1` (PF1 uplink — sender is p1/ns1) |
-| NP PCC device | `mlx5_1` on the receiver host | none (receiver HW CNP is enough) |
-| Sender RoCE | `mlx5_3` on sender host | `mlx5_3` in `ns1` (client) |
-| Receiver RoCE | `mlx5_3` on receiver host | `mlx5_2` in `ns0` (server) |
+| Step          | Original 2×BF3 testbed         | **Our single-DPU DAC loopback**          |
+| ------------- | ------------------------------ | ---------------------------------------- |
+| ECN marking   | SONiC switch WRED on DSCP26→Q3 | `doca_flow_ecn` on PF0 (`mlx5_0`)        |
+| RP PCC device | `mlx5_1` on the sender host    | `mlx5_1` (PF1 uplink — sender is p1/ns1) |
+| NP PCC device | `mlx5_1` on the receiver host  | none (receiver HW CNP is enough)         |
+| Sender RoCE   | `mlx5_3` on sender host        | `mlx5_3` in `ns1` (client)               |
+| Receiver RoCE | `mlx5_3` on receiver host      | `mlx5_2` in `ns0` (server)               |
 
 Combined run (start Flow first, then the RP controller, then drive traffic):
 

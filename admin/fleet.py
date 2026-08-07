@@ -3,7 +3,7 @@
 
 This is transport and aggregation only, never logic: every verb ships a self-contained bash
 script to each machine over stdin (`ssh <host> bash -s -- <args>`), runs them in parallel, and
-renders one table of results. The scripts next to this file are the real work, and each one is
+renders one table of results. The scripts in local_scripts/ are the real work, and each one is
 independently runnable by hand — which is the fallback for any machine this tool cannot reach.
 
 Machines are named as Tailscale knows them, so there is no ssh_config and no addresses to track.
@@ -39,6 +39,9 @@ from collections.abc import Iterator
 ADMIN_DIR = pathlib.Path(__file__).resolve().parent
 INVENTORY = ADMIN_DIR / "machines.txt"
 RESULTS_DIR = ADMIN_DIR / "results"
+# The target-side scripts live in their own directory: they are a different kind of thing to
+# this file — each runs on a machine, by hand or over ssh, and knows nothing about the fleet.
+SCRIPTS_DIR = ADMIN_DIR / "local_scripts"
 
 # Cloned over HTTPS rather than SSH: the repo is public, and putting deploy keys on a dozen
 # shared lab boxes with a published password would be a bad trade.
@@ -46,8 +49,8 @@ REPO_URL = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield.git"
 BRANCH = "main"
 TUTORIAL_USER = "s26t"
 
-# Set by admin/setup_tutorial_user.sh and handed to the participants anyway, so there is nothing
-# here to protect: hardcoding it means a fresh laptop can drive a fresh fleet with no setup.
+# Set by local_scripts/setup_tutorial_user.sh and handed to the participants anyway, so there is
+# nothing here to protect: hardcoding it means a fresh laptop can drive a fresh fleet with no setup.
 # Keys are still tried first, so machines where you ran ssh-copy-id never see this.
 PASSWORD = "sigcomm26tutorial"
 
@@ -303,7 +306,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
           f"{' (--force: local changes will be discarded)' if args.force else ''}")
 
     results = run_fleet(
-        machines, ADMIN_DIR / "sync.sh", script_args, args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run
+        machines, SCRIPTS_DIR / "sync.sh", script_args,
+        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
     )
     if args.dry_run:
         return 0
@@ -332,7 +336,7 @@ def cmd_doca(args: argparse.Namespace) -> int:
     print(f"doca: {len(machines)} machine(s)")
 
     results = run_fleet(
-        machines, ADMIN_DIR / "print_doca_version.sh", ["--emit"],
+        machines, SCRIPTS_DIR / "print_doca_version.sh", ["--emit"],
         args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
     )
     if args.dry_run:
@@ -356,7 +360,7 @@ def cmd_pcc_ready(args: argparse.Namespace) -> int:
     print(f"pcc-ready: {len(machines)} machine(s)")
 
     results = run_fleet(
-        machines, ADMIN_DIR / "check_pcc_ready.sh", ["--emit"],
+        machines, SCRIPTS_DIR / "check_pcc_ready.sh", ["--emit"],
         args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
     )
     if args.dry_run:
@@ -392,7 +396,7 @@ def cmd_deps(args: argparse.Namespace) -> int:
           f"{' (installing)' if args.install else ' (report only — pass --install to act)'}")
 
     results = run_fleet(
-        machines, ADMIN_DIR / "install_deps.sh", script_args,
+        machines, SCRIPTS_DIR / "install_deps.sh", script_args,
         args.jobs, args.timeout or INSTALL_TIMEOUT, args.dry_run,
     )
     if args.dry_run:
@@ -423,7 +427,7 @@ def cmd_firmware(args: argparse.Namespace) -> int:
     print(f"firmware: {len(machines)} machine(s)")
 
     results = run_fleet(
-        machines, ADMIN_DIR / "print_firmware_version.sh", ["--emit"],
+        machines, SCRIPTS_DIR / "print_firmware_version.sh", ["--emit"],
         args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
     )
     if args.dry_run:
@@ -480,8 +484,8 @@ def main() -> int:
         "doca", parents=[common],
         help="report the DOCA version installed on each machine",
         description=(
-            "Run admin/print_doca_version.sh on each machine and tabulate the result. The "
-            "MAJOR.MINOR version is the contract with the per-version source directories, so "
+            "Run admin/local_scripts/print_doca_version.sh on each machine and tabulate the "
+            "result. The MAJOR.MINOR version is the contract with the per-version source dirs, so "
             "this is the check for whether the fleet can be handed the same instructions. RAW "
             "and SOURCE show the string the version came from and what reported it."
         ),
@@ -492,8 +496,9 @@ def main() -> int:
         "firmware", parents=[common],
         help="report the NIC firmware version of each machine",
         description=(
-            "Run admin/print_firmware_version.sh on each machine and tabulate the result. This "
-            "is the ConnectX/BlueField firmware — what mlxlink calls 'Firmware Version', not the "
+            "Run admin/local_scripts/print_firmware_version.sh on each machine and tabulate the "
+            "result. This is the ConnectX/BlueField firmware — what mlxlink calls 'Firmware "
+            "Version', not the "
             "BSP version from bfver. The DPA and PCC exercises depend on firmware NV-config "
             "knobs and on behaviour that differs between builds, so a fleet on mixed firmware "
             "will not behave uniformly."
@@ -505,8 +510,8 @@ def main() -> int:
         "deps", parents=[common],
         help="report (or with --install, install) the packages the tutorial needs",
         description=(
-            "Run admin/install_deps.sh on each machine: the build toolchain and libraries the "
-            "doca-*/Dockerfile apt blocks install, plus what this repo's own scripts need, but "
+            "Run admin/local_scripts/install_deps.sh on each machine: the build toolchain and "
+            "libraries the doca-*/Dockerfile apt blocks install, plus what this repo needs, but "
             "natively on the Arm instead of into a container. Reports by default and touches "
             "nothing; --install acts, and is idempotent — a machine that already has everything "
             "is left alone. DOCA, dpacc, MFT and pyverbs are verified and reported, never "
@@ -522,8 +527,9 @@ def main() -> int:
         "pcc-ready", parents=[common],
         help="check the firmware NV-config knobs the PCC exercise needs",
         description=(
-            "Run admin/check_pcc_ready.sh on each machine: are USER_PROGRAMMABLE_CC=1 and "
-            "DPA_AUTHENTICATION=0 live? What counts is mlxconfig's Current column — `mlxconfig "
+            "Run admin/local_scripts/check_pcc_ready.sh on each machine: are "
+            "USER_PROGRAMMABLE_CC=1 and DPA_AUTHENTICATION=0 live? What counts is mlxconfig's "
+            "Current column — `mlxconfig "
             "set` only stages a value, and it goes live when the DPU loses power. The verdict "
             "says which of the three states a machine is in: 'ready', 'power-cycle' (staged, so "
             "only a full power-off is left — a reboot does not do it), or 'configure' (mlxconfig "

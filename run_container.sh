@@ -17,7 +17,7 @@
 # container's own network namespace and are torn down with it, so nothing leaks onto the host.
 #
 # Typical flow, all inside the shell this drops you into:
-#   sudo ./setup_roce_loopback.sh              # hugepages + ns0/ns1 + SF placement
+#   sudo ./admin/local_scripts/setup_roce_loopback.sh   # hugepages + ns0/ns1 + SF placement
 #   sudo ./build/doca-flow/doca_flow_ecn &     # start the ECN marker on PF0
 #   ./run_server.sh                            # receiver (ns0) — calls sudo internally
 #   ./run_client.sh                            # sender  (ns1), in another shell / tmux

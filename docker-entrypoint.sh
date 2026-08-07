@@ -12,7 +12,7 @@ set -u
 
 if [ "${SKIP_ROCE_SETUP:-0}" != "1" ]; then
   echo ">> Running setup_roce_loopback.sh (set SKIP_ROCE_SETUP=1 to skip) ..."
-  if ! /workspace/setup_roce_loopback.sh; then
+  if ! /workspace/admin/local_scripts/setup_roce_loopback.sh; then
     echo "WARNING: setup_roce_loopback.sh failed — continuing to the shell so you can debug." >&2
   fi
 fi
