@@ -219,10 +219,35 @@ static void initialize_doca_flow(void) {
   doca_flow_cfg_destroy(cfg);
 }
 
+/*
+ * DPDK port id of the PF uplink — the eSwitch "proxy" port, which DOCA Flow requires to be the
+ * FIRST port started in switch mode.
+ *
+ * Deliberately not doca_dpdk_get_first_port_id(): on DOCA 2.7 that returns the SF representor
+ * (DPDK port 1), not the PF (port 0) — verified on testbed B. Starting the representor first
+ * makes doca_flow_port_start fail with
+ *     failed getting is_switch_manager property - proxy port 0 not found
+ * because the proxy it resolves to (the PF) has not been started yet. DOCA 2.9 happens to return
+ * the PF from that call, which is why the same source works on testbed A.
+ */
+static uint16_t find_pf_port_id(void) {
+  uint16_t port_id;
+  RTE_ETH_FOREACH_DEV(port_id) {
+    struct rte_eth_dev_info dev_info = {0};
+    if (rte_eth_dev_info_get(port_id, &dev_info) < 0) {
+      continue;
+    }
+    if (dev_info.dev_flags == NULL || (*dev_info.dev_flags & RTE_ETH_DEV_REPRESENTOR) == 0) {
+      return port_id;
+    }
+  }
+  DOCA_LOG_CRIT("No non-representor (PF) ethdev found — cannot identify the eSwitch proxy port.");
+  exit(EXIT_FAILURE);
+}
+
 static struct doca_flow_port *port_start(struct doca_dev *dev) {
-  uint16_t pid;
-  doca_error_t err = doca_dpdk_get_first_port_id(dev, &pid);
-  crash_if_unsuccessful(err, "get_first_port_id");
+  uint16_t pid = find_pf_port_id();
+  doca_error_t err;
   struct doca_flow_port_cfg *cfg;
   err = doca_flow_port_cfg_create(&cfg);
   crash_if_unsuccessful(err, "port_cfg_create");
@@ -604,9 +629,7 @@ int main(int argc, char **argv) {
   initialize_doca_flow();
   struct doca_flow_port *port = port_start(dev);
   struct doca_flow_port *sf_rep = rep_port_start(1);
-  uint16_t pf0;
-  err = doca_dpdk_get_first_port_id(dev, &pf0);
-  crash_if_unsuccessful(err, "pf0 id");
+  uint16_t pf0 = find_pf_port_id();
 
   if (capture) {
     struct doca_flow_pipe *rss = create_rss_pipe(port);

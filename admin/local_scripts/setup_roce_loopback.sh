@@ -262,6 +262,6 @@ echo "  ${NS0} (receiver ${RECEIVER_IP}, ${RECEIVER_MAC}):"; $SUDO ip netns exec
 echo "  ${NS1} (sender   ${IP1%/*}, ${SENDER_MAC}):"; $SUDO ip netns exec "$NS1" rdma dev show
 echo
 echo "Next: build (see README), then"
-echo "    sudo ./build/doca-flow/doca_flow_ecn         # ECN marker on PF0"
+echo "    sudo ./build/doca-flow/doca_flow_ecn_pcap    # ECN marker on PF0 (--pcap to capture)"
 echo "    ./run_server.sh                              # receiver, in ${NS0}"
 echo "    ./run_client.sh                              # sender,   in ${NS1}"

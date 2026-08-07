@@ -17,7 +17,7 @@ ACK path (return):
                                                                           |
   mlx5_3 RX  <-  en3f1pf1sf0  <-  PF1 eSwitch DEFAULT  <-  p1 RX
 
-Prerequisites (run once after doca_flow_ecn has started):
+Prerequisites (run once after doca_flow_ecn_pcap has started):
   # Receiver side — DPDK probe of PF0 clears enp3s0f0s0's GID; re-assign each run:
   sudo ip addr add 10.0.0.1/24 dev enp3s0f0s0
   sudo ip neigh add 10.0.0.2 lladdr 02:26:3d:d7:e0:4b dev enp3s0f0s0 nud permanent
@@ -103,7 +103,7 @@ def run(n_msgs: int, msg_size: int, traffic_class: int):
     if gid_rx.gid == ZERO_GID:
         raise RuntimeError(
             f"{RECEIVER_DEV} GID[{GID_IDX}] is all-zeros. "
-            f"DPDK probe of PF0 clears enp3s0f0s0 GIDs — re-assign after doca_flow_ecn starts:\n"
+            f"DPDK probe of PF0 clears enp3s0f0s0 GIDs — re-assign after doca_flow_ecn_pcap starts:\n"
             f"  sudo ip addr add 10.0.0.1/24 dev enp3s0f0s0\n"
             f"  sudo ip neigh add 10.0.0.2 lladdr 02:26:3d:d7:e0:4b dev enp3s0f0s0 nud permanent")
     if gid_tx.gid == ZERO_GID:
