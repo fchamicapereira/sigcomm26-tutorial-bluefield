@@ -59,11 +59,14 @@ SSH_OPTS = [
     # No BatchMode: it would switch password auth off entirely, which is exactly the machines we
     # cannot afford to lose. One prompt only — a second one means the password is wrong, and
     # retrying it just walks the account into the sshd lockout.
-    "-o", "NumberOfPasswordPrompts=1",
-    "-o", "ConnectTimeout=10",
+    "-o",
+    "NumberOfPasswordPrompts=1",
+    "-o",
+    "ConnectTimeout=10",
     # accept-new, not 'no': a machine whose key genuinely changed should still stop us, but a
     # first-time connection must not need an interactive prompt we cannot answer unattended.
-    "-o", "StrictHostKeyChecking=accept-new",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
 ]
 
 DEFAULT_JOBS = 8
@@ -133,10 +136,7 @@ def load_inventory(path: pathlib.Path, wanted: list[str]) -> list[Machine]:
     by_name = {m.name: m for m in machines}
     unknown = [n for n in wanted if n not in by_name]
     if unknown:
-        sys.exit(
-            f"not in {path.name}: {', '.join(unknown)}\n"
-            f"known machines: {', '.join(by_name) or '(none)'}"
-        )
+        sys.exit(f"not in {path.name}: {', '.join(unknown)}\n" f"known machines: {', '.join(by_name) or '(none)'}")
     return [by_name[n] for n in wanted]
 
 
@@ -167,11 +167,7 @@ def ssh_environment() -> Iterator[dict[str, str]]:
         # A local key's passphrase must not be answered with the fleet password: refuse anything
         # that is not a password prompt and let ssh move on to the next auth method.
         helper = pathlib.Path(tmp, "askpass")
-        helper.write_text(
-            "#!/bin/sh\n"
-            'case "$1" in *[Pp]assphrase*) exit 1 ;; esac\n'
-            f"cat -- {shlex.quote(str(secret))}\n"
-        )
+        helper.write_text("#!/bin/sh\n" 'case "$1" in *[Pp]assphrase*) exit 1 ;; esac\n' f"cat -- {shlex.quote(str(secret))}\n")
         helper.chmod(0o700)
 
         env = os.environ.copy()
@@ -189,9 +185,12 @@ def run_script(
     env: dict[str, str],
 ) -> Result:
     cmd = [
-        "ssh", *SSH_OPTS,
+        "ssh",
+        *SSH_OPTS,
         f"{machine.user}@{machine.name}",
-        "bash", "-s", "--",
+        "bash",
+        "-s",
+        "--",
         *[shlex.quote(a) for a in script_args],
     ]
 
@@ -240,12 +239,8 @@ def run_fleet(
         sys.exit(f"target-side script not found: {script}")
 
     results: list[Result] = []
-    with ssh_environment() as env, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        futures = {
-            pool.submit(run_script, m, script, script_args, timeout, dry_run, env): m
-            for m in machines
-        }
+    with ssh_environment() as env, concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        futures = {pool.submit(run_script, m, script, script_args, timeout, dry_run, env): m for m in machines}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             results.append(result)
@@ -259,6 +254,7 @@ def run_fleet(
 
 def render_table(results: list[Result], columns: list[tuple[str, str]]) -> None:
     """columns: (header, key) pairs; key is looked up in Result.data, plus the specials below."""
+
     def cell(result: Result, key: str) -> str:
         if key == "@host":
             return result.machine.name
@@ -270,10 +266,7 @@ def render_table(results: list[Result], columns: list[tuple[str, str]]) -> None:
 
     headers = [header for header, _ in columns]
     rows = [[cell(r, key) for _, key in columns] for r in results]
-    widths = [
-        max(len(headers[i]), *(len(row[i]) for row in rows)) if rows else len(headers[i])
-        for i in range(len(columns))
-    ]
+    widths = [max(len(headers[i]), *(len(row[i]) for row in rows)) if rows else len(headers[i]) for i in range(len(columns))]
 
     def line(cells: list[str]) -> str:
         return "  ".join(c.ljust(w) for c, w in zip(cells, widths)).rstrip()
@@ -289,8 +282,7 @@ def summarize(results: list[Result]) -> int:
     failed = [r for r in results if not r.ok]
     print()
     if failed:
-        print(f"{len(results) - len(failed)}/{len(results)} ok — "
-              f"failures: {', '.join(r.machine.name for r in failed)}")
+        print(f"{len(results) - len(failed)}/{len(results)} ok — " f"failures: {', '.join(r.machine.name for r in failed)}")
         print(f"logs: {RESULTS_DIR}/<machine>.<script>.log")
         return 1
     print(f"{len(results)}/{len(results)} ok")
@@ -303,32 +295,31 @@ def cmd_sync(args: argparse.Namespace) -> int:
     if args.force:
         script_args.append("--force")
 
-    print(f"sync: {BRANCH} -> {len(machines)} machine(s)"
-          f"{' (--force: local changes will be discarded)' if args.force else ''}")
+    print(f"sync: {BRANCH} -> {len(machines)} machine(s)" f"{' (--force: local changes will be discarded)' if args.force else ''}")
 
     results = run_fleet(
-        machines, SCRIPTS_DIR / "sync.sh", script_args,
-        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
+        machines,
+        SCRIPTS_DIR / "sync.sh",
+        script_args,
+        args.jobs,
+        args.timeout or DEFAULT_TIMEOUT,
+        args.dry_run,
     )
     if args.dry_run:
         return 0
 
-    render_table(results, [
-        ("HOST", "@host"),
-        ("STATUS", "@status"),
-        ("ACTION", "action"),
-        ("SHA", "sha"),
-        ("BRANCH", "branch"),
-        ("NOTE", "@note"),
-    ])
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("ACTION", "action"),
+            ("SHA", "sha"),
+            ("BRANCH", "branch"),
+            ("NOTE", "@note"),
+        ],
+    )
     return summarize(results)
-
-
-def warn_if_mixed(results: list[Result], key: str, label: str) -> None:
-    """The fleet is only usable if one set of instructions fits all of it — say so when it isn't."""
-    seen = {r.data[key] for r in results if r.ok and key in r.data}
-    if len(seen) > 1:
-        print(f"\nnote: {label} is not uniform across the fleet — {', '.join(sorted(seen))}")
 
 
 def cmd_doca(args: argparse.Namespace) -> int:
@@ -337,21 +328,28 @@ def cmd_doca(args: argparse.Namespace) -> int:
     print(f"doca: {len(machines)} machine(s)")
 
     results = run_fleet(
-        machines, SCRIPTS_DIR / "print_doca_version.sh", ["--emit"],
-        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
+        machines,
+        SCRIPTS_DIR / "print_doca_version.sh",
+        ["--emit"],
+        args.jobs,
+        args.timeout or DEFAULT_TIMEOUT,
+        args.dry_run,
     )
     if args.dry_run:
         return 0
 
-    render_table(results, [
-        ("HOST", "@host"),
-        ("STATUS", "@status"),
-        ("DOCA", "doca"),
-        ("RAW", "raw"),
-        ("SOURCE", "source"),
-        ("NOTE", "@note"),
-    ])
-    warn_if_mixed(results, "doca", "DOCA")
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("DOCA", "doca"),
+            ("RAW", "raw"),
+            ("SOURCE", "source"),
+            ("NOTE", "@note"),
+        ],
+    )
+
     return summarize(results)
 
 
@@ -361,20 +359,27 @@ def cmd_pcc_ready(args: argparse.Namespace) -> int:
     print(f"pcc-ready: {len(machines)} machine(s)")
 
     results = run_fleet(
-        machines, SCRIPTS_DIR / "check_pcc_ready.sh", ["--emit"],
-        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
+        machines,
+        SCRIPTS_DIR / "check_pcc_ready.sh",
+        ["--emit"],
+        args.jobs,
+        args.timeout or DEFAULT_TIMEOUT,
+        args.dry_run,
     )
     if args.dry_run:
         return 0
 
-    render_table(results, [
-        ("HOST", "@host"),
-        ("STATUS", "@status"),
-        ("USER_PROG_CC", "upcc"),
-        ("DPA_AUTH", "dpa"),
-        ("VERDICT", "verdict"),
-        ("NOTE", "@note"),
-    ])
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("USER_PROG_CC", "upcc"),
+            ("DPA_AUTH", "dpa"),
+            ("VERDICT", "verdict"),
+            ("NOTE", "@note"),
+        ],
+    )
 
     # The two verdicts that are not 'ready' cost very different amounts of work, so they are
     # called out separately rather than lumped into one "not ready" count.
@@ -395,27 +400,33 @@ def cmd_links(args: argparse.Namespace) -> int:
     print(f"links: {len(machines)} machine(s)")
 
     results = run_fleet(
-        machines, SCRIPTS_DIR / "print_link_status.sh", ["--emit"],
-        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
+        machines,
+        SCRIPTS_DIR / "print_link_status.sh",
+        ["--emit"],
+        args.jobs,
+        args.timeout or DEFAULT_TIMEOUT,
+        args.dry_run,
     )
     if args.dry_run:
         return 0
 
-    render_table(results, [
-        ("HOST", "@host"),
-        ("STATUS", "@status"),
-        ("PCIE", "pcie"),
-        ("MST (/dev/mst/)", "mst"),
-        ("LINKS", "summary"),
-        ("LOOPBACK", "loopback"),
-        ("NOTE", "@note"),
-    ])
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("PCIE", "pcie"),
+            ("MST (/dev/mst/)", "mst"),
+            ("LINKS", "summary"),
+            ("LOOPBACK", "loopback"),
+            ("NOTE", "@note"),
+        ],
+    )
 
     # A port in loopback passes every other check — ip link, ethtool and the counters all look
     # healthy — while nothing it sends reaches the wire. Say it out loud rather than leave it in
     # a column somebody skims past.
-    looped = [f"{r.machine.name} ({r.data['loopback']})"
-              for r in results if r.ok and r.data.get("loopback", "-") != "-"]
+    looped = [f"{r.machine.name} ({r.data['loopback']})" for r in results if r.ok and r.data.get("loopback", "-") != "-"]
     if looped:
         print(f"\nnote: loopback is ACTIVE on {', '.join(looped)} — those ports are not on the wire")
 
@@ -424,8 +435,7 @@ def cmd_links(args: argparse.Namespace) -> int:
     # since `mlxconfig -d /dev/mst/...` would then fail on exactly the machines listed here.
     not_started = [r.machine.name for r in results if r.data.get("mst_started") == "no"]
     if not_started:
-        print(f"\nnote: mst is not started on {', '.join(not_started)} — the MST names there are "
-              f"derived from the PCI device id, and /dev/mst/ does not exist until `sudo mst start`")
+        print(f"\nnote: mst is not started on {', '.join(not_started)} — the MST names there are " f"derived from the PCI device id, and /dev/mst/ does not exist until `sudo mst start`")
 
     return summarize(results)
 
@@ -434,31 +444,36 @@ def cmd_deps(args: argparse.Namespace) -> int:
     machines = load_inventory(INVENTORY, args.machines)
     script_args = ["--emit"] + (["--install"] if args.install else [])
 
-    print(f"deps: {len(machines)} machine(s)"
-          f"{' (installing)' if args.install else ' (report only — pass --install to act)'}")
+    print(f"deps: {len(machines)} machine(s)" f"{' (installing)' if args.install else ' (report only — pass --install to act)'}")
 
     results = run_fleet(
-        machines, SCRIPTS_DIR / "install_deps.sh", script_args,
-        args.jobs, args.timeout or INSTALL_TIMEOUT, args.dry_run,
+        machines,
+        SCRIPTS_DIR / "install_deps.sh",
+        script_args,
+        args.jobs,
+        args.timeout or INSTALL_TIMEOUT,
+        args.dry_run,
     )
     if args.dry_run:
         return 0
 
-    render_table(results, [
-        ("HOST", "@host"),
-        ("STATUS", "@status"),
-        ("PRESENT", "present"),
-        ("INSTALLED", "added") if args.install else ("MISSING", "needed"),
-        ("MISSING TOOLS", "tools"),
-        ("NOTE", "@note"),
-    ])
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("PRESENT", "present"),
+            ("INSTALLED", "added") if args.install else ("MISSING", "needed"),
+            ("MISSING TOOLS", "tools"),
+            ("NOTE", "@note"),
+        ],
+    )
 
     # DOCA, dpacc, MFT and pyverbs are not ours to install; a machine short of one of them is
     # short of an exercise, so it has to be said out loud rather than left in a column.
     short = [r.machine.name for r in results if r.ok and r.data.get("tools", "-") != "-"]
     if short:
-        print(f"\nnote: DOCA/BSP tooling is missing on {', '.join(short)} — see the MISSING "
-              f"TOOLS column; those come with the DOCA install, not from apt")
+        print(f"\nnote: DOCA/BSP tooling is missing on {', '.join(short)} — see the MISSING " f"TOOLS column; those come with the DOCA install, not from apt")
 
     return summarize(results)
 
@@ -469,20 +484,27 @@ def cmd_firmware(args: argparse.Namespace) -> int:
     print(f"firmware: {len(machines)} machine(s)")
 
     results = run_fleet(
-        machines, SCRIPTS_DIR / "print_firmware_version.sh", ["--emit"],
-        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
+        machines,
+        SCRIPTS_DIR / "print_firmware_version.sh",
+        ["--emit"],
+        args.jobs,
+        args.timeout or DEFAULT_TIMEOUT,
+        args.dry_run,
     )
     if args.dry_run:
         return 0
 
-    render_table(results, [
-        ("HOST", "@host"),
-        ("STATUS", "@status"),
-        ("FIRMWARE", "fw"),
-        ("DEVICE", "fw_device"),
-        ("SOURCE", "fw_source"),
-        ("NOTE", "@note"),
-    ])
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("FIRMWARE", "fw"),
+            ("DEVICE", "fw_device"),
+            ("SOURCE", "fw_source"),
+            ("NOTE", "@note"),
+        ],
+    )
     warn_if_mixed(results, "fw", "firmware")
     return summarize(results)
 
@@ -498,19 +520,18 @@ def main() -> int:
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "machines", nargs="*", metavar="MACHINE",
+        "machines",
+        nargs="*",
+        metavar="MACHINE",
         help="machines to act on (default: every machine in the inventory)",
     )
-    common.add_argument("-j", "--jobs", type=int, default=DEFAULT_JOBS,
-                        help=f"machines to work on in parallel (default: {DEFAULT_JOBS})")
-    common.add_argument("--timeout", type=int,
-                        help=f"per-machine timeout in seconds "
-                             f"(default: {DEFAULT_TIMEOUT}, {INSTALL_TIMEOUT} for deps)")
-    common.add_argument("--dry-run", action="store_true",
-                        help="print what would run, connect to nothing")
+    common.add_argument("-j", "--jobs", type=int, default=DEFAULT_JOBS, help=f"machines to work on in parallel (default: {DEFAULT_JOBS})")
+    common.add_argument("--timeout", type=int, help=f"per-machine timeout in seconds " f"(default: {DEFAULT_TIMEOUT}, {INSTALL_TIMEOUT} for deps)")
+    common.add_argument("--dry-run", action="store_true", help="print what would run, connect to nothing")
 
     sync = subparsers.add_parser(
-        "sync", parents=[common],
+        "sync",
+        parents=[common],
         help="clone or update the tutorial repo on each machine",
         description=(
             f"Clone {REPO_URL} into ~{TUTORIAL_USER}, or fast-forward it if already present. "
@@ -518,12 +539,12 @@ def main() -> int:
             "that is usually somebody's exercise work; --force discards it."
         ),
     )
-    sync.add_argument("--force", action="store_true",
-                      help="reset --hard to origin/%s, discarding local changes" % BRANCH)
+    sync.add_argument("--force", action="store_true", help="reset --hard to origin/%s, discarding local changes" % BRANCH)
     sync.set_defaults(func=cmd_sync)
 
     doca = subparsers.add_parser(
-        "doca", parents=[common],
+        "doca",
+        parents=[common],
         help="report the DOCA version installed on each machine",
         description=(
             "Run admin/local_scripts/print_doca_version.sh on each machine and tabulate the "
@@ -536,7 +557,8 @@ def main() -> int:
     doca.set_defaults(func=cmd_doca)
 
     firmware = subparsers.add_parser(
-        "firmware", parents=[common],
+        "firmware",
+        parents=[common],
         help="report the NIC firmware version of each machine",
         description=(
             "Run admin/local_scripts/print_firmware_version.sh on each machine and tabulate the "
@@ -550,7 +572,8 @@ def main() -> int:
     firmware.set_defaults(func=cmd_firmware)
 
     links = subparsers.add_parser(
-        "links", parents=[common],
+        "links",
+        parents=[common],
         help="report each BlueField port's device names, link state, speed and loopback mode",
         description=(
             "Run admin/local_scripts/print_link_status.sh on each machine and tabulate mlxlink's "
@@ -564,7 +587,8 @@ def main() -> int:
     links.set_defaults(func=cmd_links)
 
     deps = subparsers.add_parser(
-        "deps", parents=[common],
+        "deps",
+        parents=[common],
         help="report (or with --install, install) the packages the tutorial needs",
         description=(
             "Run admin/local_scripts/install_deps.sh on each machine: the build toolchain and "
@@ -576,12 +600,12 @@ def main() -> int:
             "with it."
         ),
     )
-    deps.add_argument("--install", action="store_true",
-                      help="install the missing packages (default: report only)")
+    deps.add_argument("--install", action="store_true", help="install the missing packages (default: report only)")
     deps.set_defaults(func=cmd_deps)
 
     pcc_ready = subparsers.add_parser(
-        "pcc-ready", parents=[common],
+        "pcc-ready",
+        parents=[common],
         help="check the firmware NV-config knobs the PCC exercise needs",
         description=(
             "Run admin/local_scripts/check_pcc_ready.sh on each machine: are "
