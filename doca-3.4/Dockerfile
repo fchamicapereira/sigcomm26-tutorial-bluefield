@@ -57,12 +57,13 @@ RUN meson setup build "${DOCA_DIR:?DOCA_DIR build-arg is required — use ./run_
     && ninja -C build
 
 # Build the ttyplot helper (used by benchmark.sh for the live throughput chart) by running
-# the same setup_ttyplot.sh used on the host. It runs as root here (its sudo calls are
+# the same admin/local_scripts/setup_ttyplot.sh used on the host. It runs as root here (its
+# sudo calls are
 # auto-skipped), installs libncurses-dev via apt, and clones ttyplot from GitHub into
 # /workspace/ttyplot (git-ignored, so excluded from COPY — it's cloned fresh). apt lists are
 # refreshed for its apt-get install, then removed again to keep the layer small.
 RUN apt-get update \
-    && ./setup_ttyplot.sh \
+    && ./admin/local_scripts/setup_ttyplot.sh \
     && rm -rf /var/lib/apt/lists/*
 
 # Run the container as the non-root 'ubuntu' user (already in the base image: UID 1000, in the

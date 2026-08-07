@@ -8,7 +8,11 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/tenox7/ttyplot.git"
-DEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ttyplot"
+# Built into the REPO ROOT, not next to this script: benchmark.sh looks for <repo>/ttyplot/ttyplot
+# and the Dockerfiles expect /workspace/ttyplot. This script lives in admin/local_scripts/, hence
+# the two levels up. Kept git-ignored (see .gitignore).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+DEST_DIR="$REPO_ROOT/ttyplot"
 
 echo "== installing build dependencies (ncurses + pkg-config) =="
 sudo apt-get install -y libncurses-dev pkg-config

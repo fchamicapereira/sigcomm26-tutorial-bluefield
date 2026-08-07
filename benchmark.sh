@@ -2,7 +2,7 @@
 #
 # Launches the RoCE server + client together and shows a live ttyplot chart of the
 # client's (sender's) throughput. Both are stopped together on exit (Ctrl-C).
-# Requires ./setup_ttyplot.sh to have been run once (builds ./ttyplot/ttyplot).
+# Requires ./admin/local_scripts/setup_ttyplot.sh to have been run once (builds ./ttyplot/ttyplot).
 #
 set -uo pipefail
 
@@ -48,7 +48,7 @@ if [ ! -x "$TTYPLOT" ]; then
   else
     echo "       It has not been fetched." >&2
   fi
-  echo "       Build it once with:  $SCRIPT_DIR/setup_ttyplot.sh" >&2
+  echo "       Build it once with:  $SCRIPT_DIR/admin/local_scripts/setup_ttyplot.sh" >&2
   exit 1
 fi
 

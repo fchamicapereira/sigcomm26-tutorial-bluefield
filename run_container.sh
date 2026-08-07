@@ -37,7 +37,7 @@ set -euo pipefail
 
 # Build context = this script's directory (the repo root), so `docker build` works no matter where
 # the script is invoked from, and so the image gets BOTH the version's sources and the shared
-# top-level scripts (setup_ttyplot.sh, docker-entrypoint.sh, run_*.sh) the Dockerfile needs.
+# scripts (admin/local_scripts/, docker-entrypoint.sh, run_*.sh) the Dockerfile needs.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 available() {
