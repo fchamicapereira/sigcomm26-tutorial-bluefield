@@ -330,6 +330,10 @@ static void setup_capture_mirror(struct doca_flow_port *port, struct doca_flow_p
   target.fwd.next_pipe = rss_pipe;
   mc.nr_targets = 1;
   mc.target = &target;
+  /* Where the ORIGINAL packet goes after a copy is mirrored. DOCA 2.7 requires this; 2.9 refuses
+   * to bind the mirror if it is set. See doca_flow_compat.h for the measurements. */
+  DOCA_TUT_MIRROR_SET_ORIG_FWD(mc, 1); /* 1 = the SF representor */
+
   cfg.mirror_cfg = mc;
   err = doca_flow_shared_resource_set_cfg(DOCA_FLOW_SHARED_RESOURCE_MIRROR, MIRROR_ID, &cfg);
   crash_if_unsuccessful(err, "mirror set_cfg");
