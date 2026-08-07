@@ -13,13 +13,11 @@
 #if DOCA_VERSION_MAJOR == 2 && DOCA_VERSION_MINOR < 9
 
 struct doca_flow_resource_query {
-	struct doca_flow_query counter;
+  struct doca_flow_query counter;
 };
 
-static inline doca_error_t doca_flow_resource_query_entry(struct doca_flow_pipe_entry *entry,
-							    struct doca_flow_resource_query *query)
-{
-	return doca_flow_query_entry(entry, &query->counter);
+static inline doca_error_t doca_flow_resource_query_entry(struct doca_flow_pipe_entry *entry, struct doca_flow_resource_query *query) {
+  return doca_flow_query_entry(entry, &query->counter);
 }
 
 #define doca_flow_shared_resource_set_cfg doca_flow_shared_resource_cfg
@@ -46,15 +44,15 @@ static inline doca_error_t doca_flow_resource_query_entry(struct doca_flow_pipe_
  */
 #if DOCA_VERSION_MAJOR == 2 && DOCA_VERSION_MINOR < 9
 #define DOCA_TUT_MIRROR_SET_ORIG_FWD(mc, dest_port) \
-	do {                                        \
-		(mc).fwd.type = DOCA_FLOW_FWD_PORT; \
-		(mc).fwd.port_id = (dest_port);     \
-	} while (0)
+  do {                                              \
+    (mc).fwd.type = DOCA_FLOW_FWD_PORT;             \
+    (mc).fwd.port_id = (dest_port);                 \
+  } while (0)
 #else
 #define DOCA_TUT_MIRROR_SET_ORIG_FWD(mc, dest_port) \
-	do {                                        \
-		(void)(dest_port);                  \
-	} while (0)
+  do {                                              \
+    (void)(dest_port);                              \
+  } while (0)
 #endif
 
 #endif /* DOCA_FLOW_COMPAT_H_ */

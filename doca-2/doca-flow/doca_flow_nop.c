@@ -201,8 +201,7 @@ static void configure_and_start_dpdk_port(struct doca_dev *dev) {
     struct rte_flow_error flow_err = {0};
     ret = rte_flow_isolate(port_id, 1, &flow_err);
     if (ret < 0) {
-      DOCA_LOG_CRIT("rte_flow_isolate port %u failed (errno %d): %s", port_id, -ret,
-                    flow_err.message ? flow_err.message : "no details");
+      DOCA_LOG_CRIT("rte_flow_isolate port %u failed (errno %d): %s", port_id, -ret, flow_err.message ? flow_err.message : "no details");
       exit(EXIT_FAILURE);
     }
 
@@ -399,7 +398,7 @@ static struct doca_flow_pipe *create_fwd_pipe(struct doca_flow_port *port, uint1
   struct doca_flow_pipe *pipe;
   doca_error_t err;
 
-  match.outer.l3_type      = DOCA_FLOW_L3_TYPE_IP4;
+  match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
   match.outer.ip4.dscp_ecn = 0xFF; /* variable field → non-empty HWS template */
   /* match_mask.outer.ip4.dscp_ecn = 0x00 (zero mask → match any TOS) */
 
@@ -429,8 +428,7 @@ static struct doca_flow_pipe *create_fwd_pipe(struct doca_flow_port *port, uint1
   return pipe;
 }
 
-static struct doca_flow_pipe_entry *add_fwd_entry(struct doca_flow_pipe *pipe, struct doca_flow_port *port,
-                                                  bool with_counter) {
+static struct doca_flow_pipe_entry *add_fwd_entry(struct doca_flow_pipe *pipe, struct doca_flow_port *port, bool with_counter) {
   struct doca_flow_match match = {0};
   struct doca_flow_monitor monitor = {.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED};
   struct doca_flow_pipe_entry *entry;
@@ -502,8 +500,7 @@ static struct doca_flow_pipe *create_port_demux_pipe(struct doca_flow_port *port
   memset(&entry_fwd, 0, sizeof(entry_fwd));
   entry_fwd.type = DOCA_FLOW_FWD_PIPE;
   entry_fwd.next_pipe = fwd_pipe;
-  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, DOCA_FLOW_WAIT_FOR_BATCH, &status,
-                                 &entry);
+  err = doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, NULL, &entry_fwd, DOCA_FLOW_WAIT_FOR_BATCH, &status, &entry);
   crash_if_unsuccessful(err, "doca_flow_pipe_add_entry (demux wire->fwd)");
 
   /* port 1 (mlx5_2 SF egress) -> p0 wire; flags=0 flushes the batch */
@@ -557,15 +554,14 @@ int main(int argc, char **argv) {
    * fdb_def_rule_en=1 keeps the kernel's default FDB rules for PF1 so that
    * mlx5_3's egress traffic exits via p1 wire uplink. */
   char probe_args[128];
-  snprintf(probe_args, sizeof(probe_args), "dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf%u",
-           g_sf_num);
+  snprintf(probe_args, sizeof(probe_args), "dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf%u", g_sf_num);
   struct doca_dev *dev = open_and_probe_dev(0, probe_args);
 
   configure_and_start_dpdk_port(dev);
 
   initialize_doca_flow();
 
-  struct doca_flow_port *port        = port_start(dev);   /* DPDK 0: PF0 uplink */
+  struct doca_flow_port *port = port_start(dev);                                      /* DPDK 0: PF0 uplink */
   struct doca_flow_port *sf_rep_port = rep_port_start(find_sf_representor_port_id()); /* PF0 SF rep (mlx5_2) */
 
   struct doca_flow_pipe *fwd_pipe = create_fwd_pipe(port, 1, /*with_counter=*/true);

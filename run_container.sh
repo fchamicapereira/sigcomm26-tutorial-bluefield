@@ -28,10 +28,10 @@
 # `admin/fleet.py doca` prints which version each machine needs.
 #
 # Usage:
-#   ./run_container.sh 2.9                  # build for DOCA 2.9, then interactive bash
-#   ./run_container.sh doca-2.9             # same (the 'doca-' prefix is optional)
-#   ./run_container.sh 2.9 <cmd> [args…]    # build, then run <cmd> instead of bash
-#   IMAGE=myname ./run_container.sh 2.9     # override the tag (default: sigcomm26-tutorial:2.9)
+#   ./run_container.sh 2                    # build for DOCA 2.x, then interactive bash
+#   ./run_container.sh doca-2               # same (the 'doca-' prefix is optional)
+#   ./run_container.sh 3.2 <cmd> [args…]    # build, then run <cmd> instead of bash
+#   IMAGE=myname ./run_container.sh 2       # override the tag (default: sigcomm26-tutorial:2)
 #
 set -euo pipefail
 
@@ -54,8 +54,8 @@ Usage: ./run_container.sh <doca-version> [command [args…]]
 The DOCA version is required — it selects doca-<version>/Dockerfile and its base image.
 Available in this checkout: $(available)
 
-  ./run_container.sh 2.9                 # interactive shell
-  ./run_container.sh 2.9 ./run_server.sh # run one command instead
+  ./run_container.sh 2                   # interactive shell
+  ./run_container.sh 2 ./run_server.sh   # run one command instead
 EOF
 }
 
@@ -69,7 +69,7 @@ case "$1" in
   -h|--help) usage; exit 0 ;;
 esac
 
-VERSION="${1#doca-}"   # accept both '2.9' and 'doca-2.9'
+VERSION="${1#doca-}"   # accept both '2' and 'doca-2'
 shift
 DOCA_DIR="doca-${VERSION}"
 

@@ -2,10 +2,12 @@
 #
 # Print the DOCA version installed on this machine, normalized to MAJOR.MINOR (e.g. "2.9").
 #
-# This is the single source of truth for "which DOCA is this box running", and the contract
-# between a machine and the per-version source directory built for it: the string printed here
-# is expected to name a directory in the repo. Normalizing to MAJOR.MINOR is deliberate — if a
-# patch release ever needs its own directory, this script changes and nothing else does.
+# This is the single source of truth for "which DOCA is this box running", and it decides which
+# doca-*/ directory a machine builds from. The mapping is NOT mechanical: one directory can serve
+# several minor releases — doca-2/ covers every DOCA 2.x, and its doca_flow_compat.h switches on
+# DOCA_VERSION_MINOR at compile time for the places where 2.7 and 2.9 genuinely disagree.
+# MAJOR.MINOR is still what gets printed, because the minor is exactly what those compile-time
+# switches key on, so "which minor" remains worth knowing even when the directory is shared.
 #
 # Detection order (first hit wins), most to least authoritative:
 #

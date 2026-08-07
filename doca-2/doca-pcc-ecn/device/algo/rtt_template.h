@@ -37,11 +37,8 @@
  * @algo_ctxt [in/out]: A pointer to a flow context data retrieved by libpcc.
  * @results [out]: A pointer to result struct to update rate in HW.
  */
-void rtt_template_algo(doca_pcc_dev_event_t *event,
-		       uint32_t *param,
-		       uint32_t *counter,
-		       doca_pcc_dev_algo_ctxt_t *algo_ctxt,
-		       doca_pcc_dev_results_t *results);
+void rtt_template_algo(doca_pcc_dev_event_t *event, uint32_t *param, uint32_t *counter, doca_pcc_dev_algo_ctxt_t *algo_ctxt,
+                       doca_pcc_dev_results_t *results);
 
 /*
  * Entry point to rtt template (example) user algorithm initialization (reference code)
@@ -63,10 +60,8 @@ void rtt_template_init(uint32_t algo_idx);
  * @params [in]: pointer to an array which holds beginning of the current parameters to be changed
  * @return: DOCA_PCC_DEV_STATUS_FAIL if input parameters (one or more) are not legal.
  */
-doca_pcc_dev_error_t rtt_template_set_algo_params(uint32_t param_id_base,
-						  uint32_t param_num,
-						  const uint32_t *new_param_values,
-						  uint32_t *params);
+doca_pcc_dev_error_t rtt_template_set_algo_params(uint32_t param_id_base, uint32_t param_num, const uint32_t *new_param_values,
+                                                  uint32_t *params);
 
 #ifdef DOCA_PCC_SAMPLE_TX_BYTES
 /**
@@ -75,10 +70,9 @@ doca_pcc_dev_error_t rtt_template_set_algo_params(uint32_t param_id_base,
  * @port [in]: physical port number as appears in the cc event
  * @return: port utilization in 16 bit FXP number
  */
-FORCE_INLINE uint32_t rtt_get_last_tx_port_util(uint32_t port)
-{
-	extern uint32_t g_utilized_bw[];
-	return g_utilized_bw[port];
+FORCE_INLINE uint32_t rtt_get_last_tx_port_util(uint32_t port) {
+  extern uint32_t g_utilized_bw[];
+  return g_utilized_bw[port];
 }
 #endif
 

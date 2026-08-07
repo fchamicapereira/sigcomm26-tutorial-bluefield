@@ -527,7 +527,8 @@ def main() -> int:
         help="report the DOCA version installed on each machine",
         description=(
             "Run admin/local_scripts/print_doca_version.sh on each machine and tabulate the "
-            "result. The MAJOR.MINOR version is the contract with the per-version source dirs, so "
+            "result. The MAJOR.MINOR version decides which doca-*/ directory a machine builds "
+            "from (one directory may serve several minors), so "
             "this is the check for whether the fleet can be handed the same instructions. RAW "
             "and SOURCE show the string the version came from and what reported it."
         ),

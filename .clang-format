@@ -1,2 +1,9 @@
 BasedOnStyle: Google
 ColumnLimit: 140
+
+# Google style sorts #include blocks; this project cannot.
+# The DPA sources under doca-*/doca-pcc-ecn/device/ come from NVIDIA's PCC sample and are not
+# self-contained: rtt_template.h uses uint32_t without including <stdint.h>, so it compiles only
+# when a DOCA header is included before it. Sorting moved it to the top of rtt_template.c and the
+# device build failed with 11 x "unknown type name 'uint32_t'". Include order here is load-bearing.
+SortIncludes: false
