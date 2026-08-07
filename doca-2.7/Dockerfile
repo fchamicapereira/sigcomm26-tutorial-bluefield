@@ -48,6 +48,11 @@ RUN apt-get update \
     ethtool \
     && rm -rf /var/lib/apt/lists/*
 
+# Which doca-*/ directory to build. The build context is the repo ROOT (so this image also gets
+# the shared top-level scripts), so the version directory has to be named explicitly.
+# run_container.sh passes this; it must match the directory this Dockerfile lives in.
+ARG DOCA_DIR
+
 WORKDIR /workspace
 
 # Bring in the project sources (the .dockerignore keeps build/ and env/ out of the build context).
@@ -57,7 +62,8 @@ COPY . /workspace
 # _ecn_pcap) and the DOCA PCC pure-ECN controller (doca_pcc_ecn_rp) -- both are standalone
 # projects under the same top-level meson build now, no separate runtime build step for PCC.
 # This is a toolchain smoke-test; the resulting binaries need the real DPU to run.
-RUN meson setup build && ninja -C build
+RUN meson setup build "${DOCA_DIR:?DOCA_DIR build-arg is required — use ./run_container.sh}" \
+    && ninja -C build
 
 # Build the ttyplot helper (used by benchmark.sh for the live throughput chart) by running the
 # same setup_ttyplot.sh used on the host. It runs as root here (its sudo calls are no-ops),

@@ -1,13 +1,15 @@
 # Keep the build context small and avoid shipping generated/host-specific dirs.
+# Paths are relative to the repo root, which is the build context (see run_container.sh).
 .git
 build
+doca-*/build
 env
 *.code-workspace
 .vscode
 
 # Git-ignored PCC working tree: a per-run writable copy of
 # /opt/mellanox/doca/applications (see README). Rebuilt inside the container.
-doca-pcc-ecn/app
+doca-*/doca-pcc-ecn/app
 
 # Prebuilt ttyplot tree (built by setup_ttyplot.sh when needed)
 ttyplot

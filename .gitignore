@@ -5,3 +5,4 @@ env
 doca-pcc-ecn/app
 ttyplot
 admin/results
+*.pcap

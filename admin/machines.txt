@@ -2,3 +2,10 @@ bf3-ulisbon-1
 bf3-ulisbon-2
 bf3-ulisbon-3
 bf3-nvidia-1
+bf3-nvidia-2
+bf3-nvidia-3
+bf3-nvidia-4
+bf3-umich-1
+bf3-umich-2
+bf3-uwashington-1
+bf3-uwashington-2
