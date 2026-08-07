@@ -32,6 +32,26 @@ if [ "$(basename "$(readlink -f "$(command -v awk)")")" = "mawk" ]; then
   AWK=(awk -W interactive)
 fi
 
+# Resolve ttyplot relative to this script, not the caller's cwd, and refuse to start without it.
+# Checked BEFORE the server is launched: if the pipeline's last stage is missing, bash kills only
+# that stage, leaving ib_write_bw running on both ends and the terminal wedged with no obvious way
+# out — a much worse failure than exiting here.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TTYPLOT="$SCRIPT_DIR/ttyplot/ttyplot"
+
+if [ ! -x "$TTYPLOT" ]; then
+  echo "ERROR: ttyplot is not available at $TTYPLOT" >&2
+  if [ -e "$TTYPLOT" ]; then
+    echo "       It exists but is not executable — the build did not finish." >&2
+  elif [ -d "$SCRIPT_DIR/ttyplot" ]; then
+    echo "       The source is checked out but was never built." >&2
+  else
+    echo "       It has not been fetched." >&2
+  fi
+  echo "       Build it once with:  $SCRIPT_DIR/setup_ttyplot.sh" >&2
+  exit 1
+fi
+
 CLEANED_UP=""
 cleanup() {
   [ -n "$CLEANED_UP" ] && return
@@ -72,4 +92,4 @@ sudo ip netns exec "$CLIENT_NETNS" \
     --run_infinitely \
     -D "$INTERVAL_SEC" \
 | "${AWK[@]}" '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
-| ./ttyplot/ttyplot -t "RoCE throughput (client -> server)" -u "Gb/s"
+| "$TTYPLOT" -t "RoCE throughput (client -> server)" -u "Gb/s"
