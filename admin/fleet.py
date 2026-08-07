@@ -20,6 +20,7 @@ Standard library only, on purpose: clone the repo and run it, no venv, no pip.
     ./admin/fleet.py deps                     # what is each machine missing to build the exercises
     ./admin/fleet.py deps --install           # install it
     ./admin/fleet.py pcc-ready                # are the PCC firmware knobs live, staged, or unset
+    ./admin/fleet.py links                    # port PCIe names, link state, speed, loopback mode
     ./admin/fleet.py -h
 """
 
@@ -388,6 +389,47 @@ def cmd_pcc_ready(args: argparse.Namespace) -> int:
     return summarize(results)
 
 
+def cmd_links(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+
+    print(f"links: {len(machines)} machine(s)")
+
+    results = run_fleet(
+        machines, SCRIPTS_DIR / "print_link_status.sh", ["--emit"],
+        args.jobs, args.timeout or DEFAULT_TIMEOUT, args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(results, [
+        ("HOST", "@host"),
+        ("STATUS", "@status"),
+        ("PCIE", "pcie"),
+        ("MST (/dev/mst/)", "mst"),
+        ("LINKS", "summary"),
+        ("LOOPBACK", "loopback"),
+        ("NOTE", "@note"),
+    ])
+
+    # A port in loopback passes every other check — ip link, ethtool and the counters all look
+    # healthy — while nothing it sends reaches the wire. Say it out loud rather than leave it in
+    # a column somebody skims past.
+    looped = [f"{r.machine.name} ({r.data['loopback']})"
+              for r in results if r.ok and r.data.get("loopback", "-") != "-"]
+    if looped:
+        print(f"\nnote: loopback is ACTIVE on {', '.join(looped)} — those ports are not on the wire")
+
+    # The mst names are derived from the PCI device id, so they are reported even where the mst
+    # kernel modules were never loaded — in which case the paths do not exist yet. Worth saying,
+    # since `mlxconfig -d /dev/mst/...` would then fail on exactly the machines listed here.
+    not_started = [r.machine.name for r in results if r.data.get("mst_started") == "no"]
+    if not_started:
+        print(f"\nnote: mst is not started on {', '.join(not_started)} — the MST names there are "
+              f"derived from the PCI device id, and /dev/mst/ does not exist until `sudo mst start`")
+
+    return summarize(results)
+
+
 def cmd_deps(args: argparse.Namespace) -> int:
     machines = load_inventory(INVENTORY, args.machines)
     script_args = ["--emit"] + (["--install"] if args.install else [])
@@ -505,6 +547,20 @@ def main() -> int:
         ),
     )
     firmware.set_defaults(func=cmd_firmware)
+
+    links = subparsers.add_parser(
+        "links", parents=[common],
+        help="report each BlueField port's device names, link state, speed and loopback mode",
+        description=(
+            "Run admin/local_scripts/print_link_status.sh on each machine and tabulate mlxlink's "
+            "Operational Info per uplink port: PCIe address, /dev/mst device name, link state, "
+            "speed and loopback mode. "
+            "Loopback is called out separately because a looped port looks healthy to ip link, "
+            "ethtool and the port counters while nothing it sends reaches the wire. Reads only, "
+            "and never starts mst — mlxlink is addressed by PCI address."
+        ),
+    )
+    links.set_defaults(func=cmd_links)
 
     deps = subparsers.add_parser(
         "deps", parents=[common],
