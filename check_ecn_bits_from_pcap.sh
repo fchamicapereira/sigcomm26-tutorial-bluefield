@@ -63,4 +63,9 @@ echo "== following ${PCAP} (Ctrl-C to stop) =="
 # -c +0 starts at byte 0 so tcpdump receives the 24-byte pcap global header; a plain `tail -f`
 # starts near the end of the file and tcpdump then rejects the stream as not a capture file.
 # -l keeps tcpdump's output line-buffered, so packets appear as they arrive instead of in 4K blocks.
-tail -c +0 -f "$PCAP" | tcpdump -r - -v -l
+# -nn disables name resolution, and is NOT optional here: without it tcpdump does a reverse-DNS
+# lookup for every address, and the RoCE endpoints (10.0.0.1/10.0.0.2) resolve nowhere. On a DPU
+# with no working resolver each lookup blocks for seconds, so tcpdump prints the first packet and
+# then appears to hang — including on Ctrl-C. Measured on one DPU: the same 1164-packet file took
+# 40 s and showed 1 packet without -nn, and 20 ms showing all 1164 with it.
+tail -c +0 -f "$PCAP" | tcpdump -r - -nn -v -l

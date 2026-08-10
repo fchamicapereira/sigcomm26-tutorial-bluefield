@@ -254,11 +254,11 @@ static void initialize_doca_flow(void) {
  * FIRST port started in switch mode.
  *
  * Deliberately not doca_dpdk_get_first_port_id(): on DOCA 2.7 that returns the SF representor
- * (DPDK port 1), not the PF (port 0) — verified on testbed B. Starting the representor first
- * makes doca_flow_port_start fail with
+ * (DPDK port 1) rather than the PF (port 0). Starting the representor first makes
+ * doca_flow_port_start fail with
  *     failed getting is_switch_manager property - proxy port 0 not found
  * because the proxy it resolves to (the PF) has not been started yet. DOCA 2.9 happens to return
- * the PF from that call, which is why the same source works on testbed A.
+ * the PF from that call, so relying on it works there and silently breaks on 2.7.
  */
 static uint16_t find_pf_port_id(void) {
   uint16_t port_id;
