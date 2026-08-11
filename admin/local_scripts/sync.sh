@@ -73,8 +73,19 @@ else
 
 	if [ "$FORCE" -eq 1 ]; then
 		# Deliberately no `git clean -fdx`: build/ is gitignored, and wiping it would force a
-		# full meson rebuild on every machine for no reason.
-		git_t checkout -B "$BRANCH" --track "origin/$BRANCH"
+		# full meson rebuild on every machine for no reason. Untracked files that are not in the
+		# incoming commit therefore survive --force; only ones it would overwrite are replaced.
+		#
+		# --force on the checkout is what makes this work at all. A plain `checkout -B` refuses to
+		# run when the working tree has modifications, or when an untracked file sits where the
+		# target commit has one — which is exactly the tree --force exists to rescue — and with
+		# `set -e` it aborts the script before the `reset --hard` below can clean anything up.
+		#
+		# The checkout must also come FIRST. Resetting before switching would point whatever
+		# branch HEAD currently happens to be on at origin/BRANCH, and on a machine where somebody
+		# is working on their own branch that silently throws their commits away. `checkout -B`
+		# moves only BRANCH and leaves every other branch where it is.
+		git_t checkout --force -B "$BRANCH" --track "origin/$BRANCH"
 		git_t reset --hard "origin/$BRANCH"
 		action="reset"
 	else
