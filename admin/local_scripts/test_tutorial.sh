@@ -29,8 +29,8 @@ set -euo pipefail
 
 # --- defaults -----------------------------------------------------------------------------------
 REPO="${TUTORIAL_REPO:-/home/s26t/sigcomm26-tutorial-bluefield}"
-LOGDIR="${TUTORIAL_TEST_LOGDIR:-/tmp/test_tutorial}"
-PCAP=/tmp/test_tutorial.pcap
+LOGDIR="${TUTORIAL_TEST_LOGDIR:-}"   # empty => a fresh mktemp -d under /tmp, see below
+PCAP=""                              # empty => capture.pcap inside $LOGDIR
 SAMPLE=10000        # --sample: write ~1-in-N of the captured packets
 PERCENT=100         # --percent: CE-mark this share of wire IPv4 (100 => every packet)
 PCC_DEV=""          # empty => derive from PF1's PCI address
@@ -60,7 +60,7 @@ the ports at line rate. Everything before that is read-only.
 
 Options:
   --repo DIR        tutorial checkout (default: /home/s26t/sigcomm26-tutorial-bluefield)
-  --pcap PATH       capture file to write and inspect (default: /tmp/test_tutorial.pcap)
+  --pcap PATH       capture file to write and inspect (default: capture.pcap in the run's log dir)
   --sample N        doca_flow_ecn_pcap --sample (default: 10000)
   --percent P       doca_flow_ecn_pcap --percent (default: 100)
   --pcc-dev NAME    IB device for the PCC controller (default: derived from PF1's PCI address)
@@ -241,7 +241,21 @@ SERVER_LAUNCHER=""
 FLOW_BIN=""
 PCC_BIN=""
 
-mkdir -p "$LOGDIR"
+# A fresh directory per run rather than a fixed /tmp/test_tutorial. These are shared lab machines
+# with more than one account on them, and a fixed path is a path somebody else's run may already own:
+# bf3-uwaterloo-1 had a ubuntu-owned /tmp/test_tutorial, and `mkdir -p` on a directory owned by
+# another user *succeeds*, so every phase then failed on its log redirect ("Permission denied") with
+# nothing wrong with the machine. mktemp cannot collide, and an explicit TUTORIAL_TEST_LOGDIR still
+# gets checked for writability so that case fails here, once, with a straight answer.
+if [ -n "$LOGDIR" ]; then
+	mkdir -p "$LOGDIR" 2>/dev/null || true
+	[ -d "$LOGDIR" ] && [ -w "$LOGDIR" ] ||
+		die "TUTORIAL_TEST_LOGDIR=${LOGDIR} is not a directory $(id -un) can write to"
+else
+	LOGDIR=$(mktemp -d /tmp/test_tutorial.XXXXXXXX) || die "could not create a log directory under /tmp"
+fi
+PCAP="${PCAP:-$LOGDIR/capture.pcap}"
+
 SERVER_LOG="$LOGDIR/server.log"
 CLIENT_LOG="$LOGDIR/client.log"
 FLOW_LOG="$LOGDIR/doca_flow_ecn_pcap.log"
