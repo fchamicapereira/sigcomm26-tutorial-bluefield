@@ -542,11 +542,11 @@ def cmd_test_tutorial(args: argparse.Namespace) -> int:
 
     # This verb deletes every OVS bridge and SF on the target and drives its ports at line rate.
     # Naming a machine is consent; a bare `test-tutorial` doing that to the whole fleet is not.
-    if not args.machines and not args.yes:
+    if not args.machines and not args.whole_fleet:
         sys.exit(
             "test-tutorial is destructive: it wipes every OVS bridge and SF on the target and\n"
-            "kills any traffic running there. Name the machines to test, or pass --yes to run it\n"
-            f"on all {len(machines)} machines in {INVENTORY.name}."
+            "kills any traffic running there. Name the machines to test, or pass --whole-fleet to\n"
+            f"run it on all {len(machines)} machines in {INVENTORY.name}."
         )
 
     script_args = ["--emit"]
@@ -739,15 +739,20 @@ def main() -> int:
             "the DOCA PCC controller and check the throughput collapses. Where the other verbs "
             "report what a machine is, this reports whether it works. "
             "DESTRUCTIVE: it deletes every OVS bridge and SF on the target (via "
-            "setup_roce_loopback.sh) and kills any traffic running there, so it needs --yes to go "
-            "fleet-wide. A machine on a DOCA release no directory targets is reported as "
+            "setup_roce_loopback.sh) and kills any traffic running there, so going fleet-wide "
+            "has to be spelled out with --whole-fleet rather than falling out of naming no "
+            "machines. A machine on a DOCA release no directory targets is reported as "
             "unsupported and left untouched. Slow: about ten minutes per machine."
         ),
     )
     test_tutorial.add_argument("--skip-build", action="store_true", help="reuse the existing build directory instead of rebuilding from scratch")
     test_tutorial.add_argument("--skip-pcc", action="store_true", help="run the DOCA Flow half only")
     test_tutorial.add_argument("--force", action="store_true", help="run even where another DOCA/DPDK workload is already using the machine")
-    test_tutorial.add_argument("--yes", action="store_true", help="required to run on the whole inventory rather than named machines")
+    test_tutorial.add_argument(
+        "--whole-fleet",
+        action="store_true",
+        help="run on every machine in the inventory; required, because this verb is destructive and will not go fleet-wide just because no machines were named",
+    )
     test_tutorial.set_defaults(func=cmd_test_tutorial)
 
     args = parser.parse_args()
