@@ -21,6 +21,7 @@ Standard library only, on purpose: clone the repo and run it, no venv, no pip.
     ./admin/fleet.py deps --install           # install it
     ./admin/fleet.py pcc-ready                # are the PCC firmware knobs live, staged, or unset
     ./admin/fleet.py links                    # port PCIe names, link state, speed, loopback mode
+    ./admin/fleet.py test-tutorial HOST       # run both exercises end to end and report pass/fail
     ./admin/fleet.py -h
 """
 
@@ -74,6 +75,9 @@ DEFAULT_TIMEOUT = 300
 # apt on a machine that has none of this is minutes, not seconds, and every machine shares the
 # uplink; the default would time out a first run.
 INSTALL_TIMEOUT = 1800
+# test-tutorial builds both exercises from scratch (the PCC half goes through dpacc) and then
+# spends four timed windows driving traffic. Ten minutes is a normal run; this is the ceiling.
+TEST_TIMEOUT = 2400
 
 
 @dataclasses.dataclass(frozen=True)
@@ -107,11 +111,17 @@ class Result:
 
     def note(self) -> str:
         """One line of context for the summary table."""
+        # A script that emitted a subject has already said the useful thing, whether it succeeded
+        # or not — a failing one has usually put its reason there.
+        if subject := self.data.get("subject"):
+            return subject
         if self.ok:
-            return self.data.get("subject", "")
+            return ""
+        # Otherwise the last thing it said. Skip the '@@' lines: those are for parse_emitted, and
+        # showing one raw in the table is noise, not context.
         for line in reversed(self.output.splitlines()):
             line = line.strip()
-            if line:
+            if line and not line.startswith("@@"):
                 return line
         return ""
 
@@ -276,6 +286,24 @@ def render_table(results: list[Result], columns: list[tuple[str, str]]) -> None:
     print(line(["-" * w for w in widths]))
     for row in rows:
         print(line(row))
+
+
+def warn_if_mixed(results: list[Result], key: str, label: str) -> None:
+    """Say so when the fleet does not agree on a value the exercises depend on.
+
+    A column of differing strings is easy to skim past; a fleet that is not uniform on firmware or
+    DOCA cannot be handed one set of instructions, which is worth a sentence of its own.
+    """
+    values: dict[str, list[str]] = {}
+    for result in results:
+        if not result.ok:
+            continue
+        values.setdefault(result.data.get(key, "-"), []).append(result.machine.name)
+    if len(values) <= 1:
+        return
+    print(f"\nnote: the fleet is on mixed {label} —")
+    for value, hosts in sorted(values.items()):
+        print(f"  {value}: {', '.join(hosts)}")
 
 
 def summarize(results: list[Result]) -> int:
@@ -509,6 +537,82 @@ def cmd_firmware(args: argparse.Namespace) -> int:
     return summarize(results)
 
 
+def cmd_test_tutorial(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+
+    # This verb deletes every OVS bridge and SF on the target and drives its ports at line rate.
+    # Naming a machine is consent; a bare `test-tutorial` doing that to the whole fleet is not.
+    if not args.machines and not args.yes:
+        sys.exit(
+            "test-tutorial is destructive: it wipes every OVS bridge and SF on the target and\n"
+            "kills any traffic running there. Name the machines to test, or pass --yes to run it\n"
+            f"on all {len(machines)} machines in {INVENTORY.name}."
+        )
+
+    script_args = ["--emit"]
+    if args.skip_build:
+        script_args.append("--skip-build")
+    if args.skip_pcc:
+        script_args.append("--skip-pcc")
+    if args.force:
+        script_args.append("--force")
+
+    print(f"test-tutorial: {len(machines)} machine(s) — destructive, and slow (up to {TEST_TIMEOUT // 60} min each)")
+
+    results = run_fleet(
+        machines,
+        SCRIPTS_DIR / "test_tutorial.sh",
+        script_args,
+        args.jobs,
+        args.timeout or TEST_TIMEOUT,
+        args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("DOCA", "doca"),
+            ("BUILDS", "version"),
+            ("CE/IPv4", "ecn"),
+            ("BW BASE", "bw_base"),
+            ("BW PCC", "bw_pcc"),
+            ("PCC", "pcc"),
+            ("VERDICT", "verdict"),
+            ("NOTE", "@note"),
+        ],
+    )
+
+    # The request's "if there's no available version for that host, say so": a machine on a DOCA
+    # release no doca-*/ directory targets is not a broken machine, and it is not something the
+    # next `sync` fixes either — somebody has to port the exercise or reimage the box.
+    unsupported = [(r.machine.name, r.data.get("doca", "?")) for r in results if r.data.get("verdict") == "unsupported"]
+    if unsupported:
+        print("\nno tutorial version for:")
+        for host, doca in unsupported:
+            print(f"  {host} (DOCA {doca}) — nothing was changed there")
+        print("  the mapping lives in local_scripts/test_tutorial.sh; doca-2/ covers every 2.x, " "3.x minors get their own directory")
+
+    # Somebody else's experiment was running there. These are shared lab machines, and the test
+    # would have deleted their OVS bridges and SFs to make room for its own.
+    busy = [r.machine.name for r in results if r.data.get("verdict") == "busy"]
+    if busy:
+        print(f"\nin use, not touched: {', '.join(busy)}")
+        print("  another DOCA/DPDK workload is running there — see the log for what, and check " "with whoever owns it before passing --force")
+
+    skipped = [(r.machine.name, r.data.get("pcc_skip_reason", "?")) for r in results if r.data.get("pcc") == "skipped"]
+    if skipped and not args.skip_pcc:
+        print("\npcc half not run on:")
+        for host, reason in skipped:
+            print(f"  {host} — {reason}")
+        print("  see `pcc-ready` for what each machine needs")
+
+    return summarize(results)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="admin/fleet.py",
@@ -526,7 +630,11 @@ def main() -> int:
         help="machines to act on (default: every machine in the inventory)",
     )
     common.add_argument("-j", "--jobs", type=int, default=DEFAULT_JOBS, help=f"machines to work on in parallel (default: {DEFAULT_JOBS})")
-    common.add_argument("--timeout", type=int, help=f"per-machine timeout in seconds " f"(default: {DEFAULT_TIMEOUT}, {INSTALL_TIMEOUT} for deps)")
+    common.add_argument(
+        "--timeout",
+        type=int,
+        help=f"per-machine timeout in seconds " f"(default: {DEFAULT_TIMEOUT}, {INSTALL_TIMEOUT} for deps, {TEST_TIMEOUT} for test-tutorial)",
+    )
     common.add_argument("--dry-run", action="store_true", help="print what would run, connect to nothing")
 
     sync = subparsers.add_parser(
@@ -619,6 +727,28 @@ def main() -> int:
         ),
     )
     pcc_ready.set_defaults(func=cmd_pcc_ready)
+
+    test_tutorial = subparsers.add_parser(
+        "test-tutorial",
+        parents=[common],
+        help="run both exercises end to end on each machine and report pass/fail",
+        description=(
+            "Run admin/local_scripts/test_tutorial.sh on each machine: set up the RoCE loopback, "
+            "build the doca-*/ directory that machine's DOCA release needs, drive traffic across "
+            "the two ports, check that DOCA Flow CE-marks it and captures it to a pcap, then load "
+            "the DOCA PCC controller and check the throughput collapses. Where the other verbs "
+            "report what a machine is, this reports whether it works. "
+            "DESTRUCTIVE: it deletes every OVS bridge and SF on the target (via "
+            "setup_roce_loopback.sh) and kills any traffic running there, so it needs --yes to go "
+            "fleet-wide. A machine on a DOCA release no directory targets is reported as "
+            "unsupported and left untouched. Slow: about ten minutes per machine."
+        ),
+    )
+    test_tutorial.add_argument("--skip-build", action="store_true", help="reuse the existing build directory instead of rebuilding from scratch")
+    test_tutorial.add_argument("--skip-pcc", action="store_true", help="run the DOCA Flow half only")
+    test_tutorial.add_argument("--force", action="store_true", help="run even where another DOCA/DPDK workload is already using the machine")
+    test_tutorial.add_argument("--yes", action="store_true", help="required to run on the whole inventory rather than named machines")
+    test_tutorial.set_defaults(func=cmd_test_tutorial)
 
     args = parser.parse_args()
     return args.func(args)

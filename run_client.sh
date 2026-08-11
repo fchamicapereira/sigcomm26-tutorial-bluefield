@@ -14,8 +14,12 @@ USE_RDMA_CM="1"
 
 SERVER_IP="10.0.0.1"   # receiver's IP (the server, in ns0) — positional arg makes this the client
 
+# stdbuf -oL because ib_write_bw block-buffers stdout whenever it is not a TTY: redirect this
+# script to a file or a pipe without it and nothing appears until 4 KB has piled up, which for a
+# once-a-second report is minutes. It has to sit INSIDE the sudo, since sudo strips the LD_PRELOAD
+# that stdbuf works through. Same reason and same placement as in benchmark.sh.
 sudo ip netns exec "$NETNS" \
-    ib_write_bw \
+    stdbuf -oL ib_write_bw \
     -d "$RDMA_DEV" \
     -x "$GID" \
     -F \

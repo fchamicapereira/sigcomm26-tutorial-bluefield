@@ -75,6 +75,9 @@ PACKAGES=(
 	libbsd-dev
 	libpcap-dev
 
+	# check_ecn_bits_from_pcap.sh decodes the capture with tcpdump to show the ECN codepoints.
+	tcpdump
+
 	# dpacc/DPDK use pyelftools when building the DPA algo.
 	python3-pyelftools
 

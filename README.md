@@ -701,7 +701,9 @@ differing in what (if anything) they do to a packet before delivering it to the 
 - **`doca_flow_ecn_pcap`** — combines `doca_flow_ecn` and `doca_flow_mirror` in **one** PF0 program:
   CE-marks `--percent` of the traffic **and** captures a copy to a `.pcap` at the same time (so you
   don't have to fight over PF0 with two programs). `--pcap <file>` (optional — omit for pure
-  ECN-mark mode), `--percent N`, `--sample N`; pcap writing starts paused and toggles with **SPACE**.
+  ECN-mark mode), `--percent N`, `--sample N`; pcap writing starts paused and toggles with **SPACE**,
+  or with `kill -USR1 <pid>` when there is no tty to read a keypress from (piped, `nohup`, or driven
+  by a script — the app prints its own pid at startup).
   Full docs: [`doca-flow/doca_flow_ecn_pcap.README.md`](doca-flow/doca_flow_ecn_pcap.README.md).
 
 Initial setup of the build directory:

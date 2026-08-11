@@ -87,7 +87,10 @@ struct app_config {
 };
 
 static volatile bool g_running = true;
-static volatile bool g_capture_writing = false; /* starts OFF; SPACE toggles pcap writing at runtime */
+static volatile bool g_capture_writing = false; /* starts OFF; SPACE or SIGUSR1 toggles it at runtime */
+/* Raised by the SIGUSR1 handler, serviced by the main loop. The flip logs, and DOCA_LOG_* is not
+ * async-signal-safe, so setting this flag is all the handler is allowed to do. */
+static volatile sig_atomic_t g_toggle_pending = 0;
 static struct termios g_saved_termios;
 static bool g_termios_saved = false;
 
@@ -95,10 +98,18 @@ static void signal_handler(int s) {
   if (s == SIGINT || s == SIGTERM) g_running = false;
 }
 
-/* Put STDIN into unbuffered, non-blocking mode so a single keypress (SPACE) toggles capture. */
-static void enable_key_toggle(void) {
+static void toggle_signal_handler(int s) {
+  (void)s;
+  g_toggle_pending = 1;
+}
+
+/* Put STDIN into unbuffered, non-blocking mode so a single keypress (SPACE) toggles capture.
+ * Returns false when there is no tty — piped, nohup'd, or driven over ssh by a script — in which
+ * case SIGUSR1 is the only way to toggle, and the caller has to say so rather than advertise a key
+ * that will never be read. */
+static bool enable_key_toggle(void) {
   struct termios t;
-  if (tcgetattr(STDIN_FILENO, &t) != 0) return; /* not a tty (piped/nohup) — no toggle, no hang */
+  if (tcgetattr(STDIN_FILENO, &t) != 0) return false;
   g_saved_termios = t;
   g_termios_saved = true;
   t.c_lflag &= ~(ICANON | ECHO);
@@ -107,19 +118,26 @@ static void enable_key_toggle(void) {
   tcsetattr(STDIN_FILENO, TCSANOW, &t);
   int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
   if (fl != -1) fcntl(STDIN_FILENO, F_SETFL, fl | O_NONBLOCK);
+  return true;
 }
 static void restore_key_toggle(void) {
   if (g_termios_saved) tcsetattr(STDIN_FILENO, TCSANOW, &g_saved_termios);
 }
-/* Drain any pending keypresses; SPACE / 'c' / 'p' flips whether packets are written to the pcap. */
-static void poll_key_toggle(void) {
+static void flip_capture_writing(const char *how) {
+  g_capture_writing = !g_capture_writing;
+  DOCA_LOG_INFO("[toggle] pcap writing %s (via %s; HW flooding stays active)", g_capture_writing ? "ENABLED" : "PAUSED", how);
+}
+/* Service both toggle paths: a SIGUSR1 that arrived since the last pass, then any pending
+ * keypresses — SPACE / 'c' / 'p' flip whether packets are written to the pcap. */
+static void poll_capture_toggle(void) {
+  if (g_toggle_pending) {
+    g_toggle_pending = 0;
+    flip_capture_writing("SIGUSR1");
+  }
   if (!g_termios_saved) return;
   char c;
   while (read(STDIN_FILENO, &c, 1) == 1) {
-    if (c == ' ' || c == 'c' || c == 'p') {
-      g_capture_writing = !g_capture_writing;
-      DOCA_LOG_INFO("[toggle] pcap writing %s (HW flooding stays active)", g_capture_writing ? "ENABLED" : "PAUSED");
-    }
+    if (c == ' ' || c == 'c' || c == 'p') flip_capture_writing("SPACE");
   }
 }
 
@@ -821,8 +839,13 @@ int main(int argc, char **argv) {
     DOCA_LOG_INFO("Marking ~%.4g%%   | capture: %s — Ctrl-C to stop", 100.0 / (mask + 1), dst);
   if (capture) {
     if (cfg.sample_n > 1) DOCA_LOG_INFO("Capturing ~1-in-%u packets to the pcap", cfg.sample_n);
-    enable_key_toggle();
-    DOCA_LOG_INFO("pcap writing starts PAUSED — press SPACE (or 'c'/'p') to start/stop writing to '%s'", cfg.pcap_path);
+    signal(SIGUSR1, toggle_signal_handler);
+    if (enable_key_toggle())
+      DOCA_LOG_INFO("pcap writing starts PAUSED — press SPACE (or 'c'/'p'), or `kill -USR1 %d`, to start/stop writing to '%s'",
+                    (int)getpid(), cfg.pcap_path);
+    else
+      DOCA_LOG_INFO("pcap writing starts PAUSED — no tty, so SPACE cannot be read: `kill -USR1 %d` to start/stop writing to '%s'",
+                    (int)getpid(), cfg.pcap_path);
   }
 
   struct rte_mbuf *bufs[RX_BURST];
@@ -861,7 +884,7 @@ int main(int argc, char **argv) {
       }
     }
     if (nb == 0) usleep(200);
-    poll_key_toggle();
+    poll_capture_toggle();
     time_t now = time(NULL);
     if (now != last) {
       last = now;
