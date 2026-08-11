@@ -1,0 +1,29 @@
+{
+  "tutorial-title": "Programming SmartNICs: From Packet Processing to Programmable Transport",
+  "conference": "ACM SIGCOMM 2026",
+  "tutorial-url": "https://conferences.sigcomm.org/sigcomm/2026/tutorials/smartnic/",
+  "repo-url": "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield",
+
+  "institutions": [
+    { "id": "inesc-id", "name": "INESC-ID, Instituto Superior Técnico, University of Lisbon" },
+    { "id": "michigan", "name": "University of Michigan" },
+    { "id": "waterloo", "name": "University of Waterloo" },
+    { "id": "nvidia", "name": "NVIDIA" },
+    { "id": "purdue", "name": "Purdue University" },
+    { "id": "washington", "name": "University of Washington" }
+  ],
+
+  "presenters": [
+    { "name": "Fernando Ramos", "affiliations": [{ "id": "inesc-id" }] },
+    { "name": "Muhammad Shahbaz", "affiliations": [{ "id": "michigan" }] },
+    { "name": "Mina Tahmasbi Arashloo", "affiliations": [{ "id": "waterloo" }] },
+    { "name": "Mario Baldi", "affiliations": [{ "id": "nvidia" }] }
+  ],
+
+  "organizers": [
+    { "name": "Francisco Pereira", "affiliations": [{ "id": "inesc-id" }] },
+    { "name": "Bilal Saleem", "affiliations": [{ "id": "purdue" }, { "id": "michigan" }] },
+    { "name": "Tyler Liu", "affiliations": [{ "id": "waterloo" }] },
+    { "name": "Chenxingyu Zhao", "affiliations": [{ "id": "washington" }] }
+  ]
+}
