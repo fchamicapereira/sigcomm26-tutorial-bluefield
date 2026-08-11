@@ -75,9 +75,16 @@ DEFAULT_TIMEOUT = 300
 # apt on a machine that has none of this is minutes, not seconds, and every machine shares the
 # uplink; the default would time out a first run.
 INSTALL_TIMEOUT = 1800
-# test-tutorial builds both exercises from scratch (the PCC half goes through dpacc) and then
-# spends four timed windows driving traffic. Ten minutes is a normal run; this is the ceiling.
-TEST_TIMEOUT = 2400
+# test-tutorial spends about a minute in deliberate sleeps (traffic warm-up, two averaging windows,
+# the capture window, the post-PCC settle) plus setup, on top of building both exercises from
+# scratch. Measured end to end at 100s on a DOCA 2.9 machine.
+#
+# The build is not the expensive part and does not need to be planned around: a from-scratch
+# DOCA 3.4 build takes 6.5s (5.8s of meson setup, which is where build_device_code.sh runs dpacc
+# over the DPA sources, and 0.7s of ninja) on a machine that was already busy. So this is not an
+# estimate of anything — it is the point at which a run is declared hung and killed, and what it
+# has to be large enough for is the sleeps, not the compiler.
+TEST_TIMEOUT = 300
 
 
 @dataclasses.dataclass(frozen=True)
@@ -557,7 +564,9 @@ def cmd_test_tutorial(args: argparse.Namespace) -> int:
     if args.force:
         script_args.append("--force")
 
-    print(f"test-tutorial: {len(machines)} machine(s) — destructive, and slow (up to {TEST_TIMEOUT // 60} min each)")
+    # "at most", explicitly: an earlier version quoted the timeout on its own and read as though
+    # every machine took that long, when the measured run is about two minutes.
+    print(f"test-tutorial: {len(machines)} machine(s) — destructive; about 2 min each, at most " f"{TEST_TIMEOUT // 60} min before a machine is given up on")
 
     results = run_fleet(
         machines,
@@ -630,10 +639,13 @@ def main() -> int:
         help="machines to act on (default: every machine in the inventory)",
     )
     common.add_argument("-j", "--jobs", type=int, default=DEFAULT_JOBS, help=f"machines to work on in parallel (default: {DEFAULT_JOBS})")
+    # Listed from the constants rather than spelled out, so this cannot go stale the next time one
+    # of them moves — and so a verb whose timeout is just the default is not named here at all.
+    overrides = ", ".join(f"{value} for {verb}" for verb, value in (("deps", INSTALL_TIMEOUT), ("test-tutorial", TEST_TIMEOUT)) if value != DEFAULT_TIMEOUT)
     common.add_argument(
         "--timeout",
         type=int,
-        help=f"per-machine timeout in seconds " f"(default: {DEFAULT_TIMEOUT}, {INSTALL_TIMEOUT} for deps, {TEST_TIMEOUT} for test-tutorial)",
+        help=f"per-machine timeout in seconds (default: {DEFAULT_TIMEOUT}{', ' + overrides if overrides else ''})",
     )
     common.add_argument("--dry-run", action="store_true", help="print what would run, connect to nothing")
 
@@ -742,7 +754,9 @@ def main() -> int:
             "setup_roce_loopback.sh) and kills any traffic running there, so going fleet-wide "
             "has to be spelled out with --whole-fleet rather than falling out of naming no "
             "machines. A machine on a DOCA release no directory targets is reported as "
-            "unsupported and left untouched. Slow: about ten minutes per machine."
+            "unsupported and left untouched. Takes about two minutes per machine, most of it "
+            "deliberate — traffic has to settle and then be averaged over a window, twice — and "
+            f"is given up on after {TEST_TIMEOUT // 60} minutes."
         ),
     )
     test_tutorial.add_argument("--skip-build", action="store_true", help="reuse the existing build directory instead of rebuilding from scratch")

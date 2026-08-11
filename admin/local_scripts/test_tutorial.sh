@@ -372,7 +372,10 @@ if [ -n "$BUSY" ]; then
 	log "   busy: --force given, ignoring $(printf '%s\n' "$BUSY" | wc -l | tr -d ' ') foreign DOCA/DPDK process(es)"
 fi
 
-trap cleanup EXIT INT TERM
+# HUP as well as the rest: when fleet.py's per-machine timeout fires it kills the local ssh client,
+# and what reaches this script is the session hanging up. Without HUP here a timed-out run would
+# leave an ib_write_bw pair and a loaded DPA program behind on the machine.
+trap cleanup EXIT INT TERM HUP
 
 # --- phases ---------------------------------------------------------------------------------------
 phase_setup() {
