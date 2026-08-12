@@ -39,8 +39,8 @@ typedef struct {
   rtt_template_flags_t flags;  /* Flags struct */
   uint8_t abort_cnt;           /* Counter of abort RTT requests */
   uint8_t rtt_meas_psn;        /* RTT request sequence number */
-  uint8_t rtt_req_to_rtt_sent; /* Set between the algorithm's RTT request until the time at which the RTT packet
-                                  was sent */
+  uint8_t rtt_req_to_rtt_sent; /* Set between the algorithm's RTT request until the time at which
+                                  the RTT packet was sent */
 #ifdef DOCA_PCC_NP_RX_RATE
   uint32_t last_np_rx_bytes;              /* Last received NP RX bytes */
   uint32_t last_np_rx_bytes_timestamp_us; /* Last received NP RX timestamp (usec) */

@@ -27,8 +27,8 @@
  * @attr [in]: additional parameters (algo type).
  * @results [out]: result struct to update rate in HW.
  */
-void doca_pcc_dev_user_algo(doca_pcc_dev_algo_ctxt_t *algo_ctxt, doca_pcc_dev_event_t *event, const doca_pcc_dev_attr_t *attr,
-                            doca_pcc_dev_results_t *results) {
+void doca_pcc_dev_user_algo(doca_pcc_dev_algo_ctxt_t *algo_ctxt, doca_pcc_dev_event_t *event,
+                            const doca_pcc_dev_attr_t *attr, doca_pcc_dev_results_t *results) {
   uint32_t port_num = doca_pcc_dev_get_ev_attr(event).port_num;
   uint32_t *param = doca_pcc_dev_get_algo_params(port_num, attr->algo_slot);
   uint32_t *counter = doca_pcc_dev_get_counters(port_num, attr->algo_slot);
@@ -74,8 +74,10 @@ void doca_pcc_dev_user_init(uint32_t *disable_event_bitmask) {
  * @params [in]: current parameter array to update.
  * @return: DOCA_PCC_DEV_STATUS_OK if applied, DOCA_PCC_DEV_STATUS_FAIL if rejected.
  */
-doca_pcc_dev_error_t doca_pcc_dev_user_set_algo_params(uint32_t port_num, uint32_t algo_slot, uint32_t param_id_base, uint32_t param_num,
-                                                       const uint32_t *new_param_values, uint32_t *params) {
+doca_pcc_dev_error_t doca_pcc_dev_user_set_algo_params(uint32_t port_num, uint32_t algo_slot,
+                                                       uint32_t param_id_base, uint32_t param_num,
+                                                       const uint32_t *new_param_values,
+                                                       uint32_t *params) {
   doca_pcc_dev_error_t ret = DOCA_PCC_DEV_STATUS_OK;
 
   switch (algo_slot) {

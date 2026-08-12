@@ -48,13 +48,16 @@ static int log_level = LOG_LEVEL_INFO;
  * firmware schedules PCC work on -- taken as-is from NVIDIA's stock sample, not
  * something a controller author tunes.
  */
-static const uint32_t rp_threads[PCC_RP_THREADS_NUM] = {176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 192, 193, 194, 195, 196,
-                                                        197, 198, 199, 200, 201, 202, 203, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
-                                                        218, 219, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 240};
+static const uint32_t rp_threads[PCC_RP_THREADS_NUM] = {
+    176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 192, 193, 194, 195, 196,
+    197, 198, 199, 200, 201, 202, 203, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
+    218, 219, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 240};
 
 /* Format string for the one doca_pcc_dev_trace_5() call in device/rp_main.c's init log. */
 static char *trace_message_formats[] = {
-    "format 0 - user init: port num = %#lx, algo index = %#lx, algo slot = %#lx, algo enable = %#lx, disable event bitmask = %#lx\n", NULL};
+    "format 0 - user init: port num = %#lx, algo index = %#lx, algo slot = %#lx, algo enable = "
+    "%#lx, disable event bitmask = %#lx\n",
+    NULL};
 
 static volatile sig_atomic_t stop_requested;
 
@@ -112,7 +115,8 @@ static doca_error_t open_pcc_device(const char *device_name, struct doca_dev **d
   *doca_device = NULL;
   for (uint32_t i = 0; i < nb_devs; i++) {
     if (doca_devinfo_get_is_pcc_supported(dev_list[i]) != DOCA_SUCCESS) continue;
-    if (doca_devinfo_get_ibdev_name(dev_list[i], ibdev_name, sizeof(ibdev_name)) != DOCA_SUCCESS) continue;
+    if (doca_devinfo_get_ibdev_name(dev_list[i], ibdev_name, sizeof(ibdev_name)) != DOCA_SUCCESS)
+      continue;
     if (strncmp(device_name, ibdev_name, DOCA_DEVINFO_IBDEV_NAME_SIZE) != 0) continue;
     result = doca_dev_open(dev_list[i], doca_device);
     break;
@@ -169,7 +173,8 @@ int main(int argc, char **argv) {
 
   result = doca_pcc_get_min_num_threads(pcc, &min_threads);
   if (result == DOCA_SUCCESS) result = doca_pcc_get_max_num_threads(pcc, &max_threads);
-  if (result != DOCA_SUCCESS || PCC_RP_THREADS_NUM < min_threads || PCC_RP_THREADS_NUM > max_threads) {
+  if (result != DOCA_SUCCESS || PCC_RP_THREADS_NUM < min_threads ||
+      PCC_RP_THREADS_NUM > max_threads) {
     PRINT_ERROR("Error: RP thread count %d out of device-supported range\n", PCC_RP_THREADS_NUM);
     goto destroy_pcc;
   }

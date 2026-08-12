@@ -693,46 +693,8 @@ static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *por
 // No pipe forwards here directly from the marking chain. This one is reached through the
 // flooding pipe's capture entry, which is also why it is not a root pipe.
 static struct doca_flow_pipe *create_to_cpu_pipe(struct doca_flow_port *port) {
-  static uint16_t rssq[1] = {0};
-  struct doca_flow_match match = {0};
-  struct doca_flow_fwd fwd = {0};
-  struct doca_flow_pipe_cfg *cfg;
-  struct doca_flow_pipe *pipe;
-  struct doca_flow_pipe_entry *e;
-  struct entry_batch_status st = {0};
-  doca_error_t err;
-  match.parser_meta.outer_l3_type = DOCA_FLOW_L3_META_IPV4;
-  fwd.type = DOCA_FLOW_FWD_RSS;
-  // 3.4 nests the RSS parameters in fwd.rss; 2.x had them flat on the fwd struct.
-  fwd.rss.queues_array = rssq;
-  fwd.rss.nr_queues = 1;
-  fwd.rss.outer_flags = DOCA_FLOW_RSS_IPV4 | DOCA_FLOW_RSS_UDP;
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "to_cpu cfg_create");
-  err = doca_flow_pipe_cfg_set_name(cfg, "TO_CPU");
-  doca_check(err, "to_cpu set_name");
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "to_cpu set_type");
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "to_cpu set_domain");
-  err = doca_flow_pipe_cfg_set_is_root(cfg, false);
-  doca_check(err, "to_cpu set_is_root");
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 1);
-  doca_check(err, "to_cpu set_nr_entries");
-  err = doca_flow_pipe_cfg_set_match(cfg, &match, NULL);
-  doca_check(err, "to_cpu set_match");
-  err = doca_flow_pipe_create(cfg, &fwd, NULL, &pipe);
-  doca_check(err, "to_cpu create");
-  doca_flow_pipe_cfg_destroy(cfg);
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &match, 0, NULL, NULL, NULL,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &st, &e);
-  doca_check(err, "to_cpu add_entry");
-  err = doca_flow_entries_process(port, 0, 10000, 1);
-  doca_check(err, "to_cpu process");
-  doca_check((st.failure || st.nb_processed != 1) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-             "to_cpu install");
-  DOCA_LOG_INFO("TO_CPU pipe ready -> CPU queue 0");
-  return pipe;
+  // TODO 1 -- your code here.
+  return NULL;
 }
 
 // FLOOD — how a packet reaches both the receiver and the pcap. This is 3.4's replacement for
@@ -755,59 +717,8 @@ static struct doca_flow_pipe *create_to_cpu_pipe(struct doca_flow_port *port) {
 static struct doca_flow_pipe *create_flood_pipe(struct doca_flow_port *port,
                                                 struct doca_flow_pipe *production_pipe,
                                                 struct doca_flow_pipe *capture_pipe) {
-  struct doca_flow_match m = {0};
-  // next_pipe is set per entry below
-  struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = NULL};
-  struct doca_flow_pipe_cfg *cfg;
-  struct doca_flow_pipe *pipe;
-  struct entry_batch_status st = {0};
-  struct doca_flow_pipe_entry *e;
-  doca_error_t err;
-
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "flood cfg");
-  err = doca_flow_pipe_cfg_set_name(cfg, "FLOOD");
-  doca_check(err, "flood name");
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_HASH);
-  doca_check(err, "flood type");
-  err = doca_flow_pipe_cfg_set_hash_map_algorithm(cfg, DOCA_FLOW_PIPE_HASH_MAP_ALGORITHM_FLOODING);
-  doca_check(err, "flood algorithm");
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "flood dom");
-  err = doca_flow_pipe_cfg_set_is_root(cfg, false);
-  doca_check(err, "flood root");
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, FLOOD_NB_ENTRIES);
-  doca_check(err, "flood nr");
-  // a hash pipe selects by index, not by match
-  err = doca_flow_pipe_cfg_set_match(cfg, &m, NULL);
-  doca_check(err, "flood match");
-  err = doca_flow_pipe_create(cfg, &fwd, NULL, &pipe);
-  doca_check(err, "flood create");
-  doca_flow_pipe_cfg_destroy(cfg);
-
-  struct doca_flow_fwd ef;
-
-  memset(&ef, 0, sizeof(ef));
-  ef.type = DOCA_FLOW_FWD_PIPE;
-  ef.next_pipe = production_pipe;
-  err = doca_flow_pipe_hash_add_entry(0, pipe, FLOOD_ENTRY_PRODUCTION, 0, NULL, NULL, &ef,
-                                      DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &st, &e);
-  doca_check(err, "flood entry 0 (production)");
-
-  memset(&ef, 0, sizeof(ef));
-  ef.type = DOCA_FLOW_FWD_PIPE;
-  ef.next_pipe = capture_pipe;
-  err = doca_flow_pipe_hash_add_entry(0, pipe, FLOOD_ENTRY_CAPTURE, 0, NULL, NULL, &ef,
-                                      DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &st, &e);
-  doca_check(err, "flood entry 1 (capture)");
-
-  err = doca_flow_entries_process(port, 0, 10000, FLOOD_NB_ENTRIES);
-  doca_check(err, "flood process");
-  doca_check(
-      (st.failure || st.nb_processed != FLOOD_NB_ENTRIES) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-      "flood install: %u/%u processed", st.nb_processed, FLOOD_NB_ENTRIES);
-  DOCA_LOG_INFO("FLOOD pipe ready: entry 0 -> SF (ordered), entry 1 -> TO_CPU (pcap copy)");
-  return pipe;
+  // TODO 2 -- your code here.
+  return NULL;
 }
 
 // The main forwarding pipe: wire IPv4 -> the receiver SF. build_pipeline() builds it TWICE:
@@ -831,79 +742,8 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
                                                         struct doca_flow_pipe *flood_pipe,
                                                         struct doca_flow_pipe *miss_pipe,
                                                         struct doca_flow_pipe_entry **out_entry) {
-  struct doca_flow_match m = {0}, mm = {0};
-  struct doca_flow_actions act = {0}, *act_arr[1] = {&act};
-  struct doca_flow_monitor mon = {0};
-  struct doca_flow_fwd fwd = {0};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = miss_pipe};
-  struct doca_flow_pipe_cfg *cfg;
-  struct doca_flow_pipe *pipe;
-  struct entry_batch_status st = {0};
-  doca_error_t err;
-
-  m.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
-  m.outer.ip4.dscp_ecn = 0xFF;
-  mm.outer.ip4.dscp_ecn = 0x00;
-  mon.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;
-  // When capturing, fan out through FLOOD to reach {SF, pcap}; otherwise go straight to the SF.
-  // FWD_HASH_PIPE names both the pipe and the algorithm to run on it.
-  if (flood_pipe != NULL) {
-    fwd.type = DOCA_FLOW_FWD_HASH_PIPE;
-    fwd.hash_pipe.pipe = flood_pipe;
-    fwd.hash_pipe.algorithm = DOCA_FLOW_PIPE_HASH_MAP_ALGORITHM_FLOODING;
-  } else {
-    fwd.type = DOCA_FLOW_FWD_PORT;
-    fwd.port_id = 1;
-  }
-  // 0xFF is the action template ("entries may write this field"); the per-entry value follows below
-  if (mark) {
-    act.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
-    act.outer.ip4.dscp_ecn = 0xFF;
-  }
-
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "%s cfg", name);
-  err = doca_flow_pipe_cfg_set_name(cfg, name);
-  doca_check(err, "%s name", name);
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "%s type", name);
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "%s dom", name);
-  err = doca_flow_pipe_cfg_set_is_root(cfg, false);
-  doca_check(err, "%s root", name);
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 1);
-  doca_check(err, "%s nr", name);
-  err = doca_flow_pipe_cfg_set_match(cfg, &m, &mm);
-  doca_check(err, "%s match", name);
-  if (mark) {
-    err = doca_flow_pipe_cfg_set_actions(cfg, act_arr, NULL, NULL, 1);
-    doca_check(err, "%s actions", name);
-  }
-  err = doca_flow_pipe_cfg_set_monitor(cfg, &mon);
-  doca_check(err, "%s monitor", name);
-  err = doca_flow_pipe_create(cfg, &fwd, &fwd_miss, &pipe);
-  doca_check(err, "%s create", name);
-  doca_flow_pipe_cfg_destroy(cfg);
-
-  struct doca_flow_actions eact = {0};
-  // 3.4 passes the action-template index as an argument to add_entry; 2.x carried it here in
-  // the doca_flow_actions struct, which no longer has an action_idx field.
-  if (mark) {
-    eact.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
-    // CE
-    eact.outer.ip4.dscp_ecn = 0x03;
-  }
-  m.outer.ip4.dscp_ecn = 0x00;
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &m, 0, mark ? &eact : NULL, &mon, NULL,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &st, out_entry);
-  doca_check(err, "%s add_entry", name);
-  err = doca_flow_entries_process(port, 0, 10000, 1);
-  doca_check(err, "%s process", name);
-  doca_check((st.failure || st.nb_processed != 1) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-             "%s install", name);
-  DOCA_LOG_INFO("%s pipe ready (%s, %s)", name, mark ? "CE-mark" : "no-mark",
-                flood_pipe ? "flood->SF+pcap" : "direct->SF");
-  return pipe;
+  // TODO 3 -- your code here.
+  return NULL;
 }
 
 // RANDOM_SAMPLE — splits wire traffic between the marking and non-marking paths, in hardware.
@@ -918,42 +758,8 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
 static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
                                                    struct doca_flow_pipe *hit,
                                                    struct doca_flow_pipe *miss, uint16_t mask) {
-  struct doca_flow_match m = {0}, mm = {0};
-  struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = hit};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = miss};
-  struct doca_flow_pipe_cfg *cfg;
-  struct doca_flow_pipe *pipe;
-  struct doca_flow_pipe_entry *e;
-  struct entry_batch_status st = {0};
-  doca_error_t err;
-  m.parser_meta.random = 0;
-  mm.parser_meta.random = mask;
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "sample cfg");
-  err = doca_flow_pipe_cfg_set_name(cfg, "RANDOM_SAMPLE");
-  doca_check(err, "sample name");
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "sample type");
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "sample dom");
-  err = doca_flow_pipe_cfg_set_is_root(cfg, false);
-  doca_check(err, "sample root");
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 1);
-  doca_check(err, "sample nr");
-  err = doca_flow_pipe_cfg_set_match(cfg, &m, &mm);
-  doca_check(err, "sample match");
-  err = doca_flow_pipe_create(cfg, &fwd, &fwd_miss, &pipe);
-  doca_check(err, "sample create");
-  doca_flow_pipe_cfg_destroy(cfg);
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &m, 0, NULL, NULL, NULL,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &st, &e);
-  doca_check(err, "sample entry");
-  err = doca_flow_entries_process(port, 0, 10000, 1);
-  doca_check(err, "sample process");
-  doca_check((st.failure || st.nb_processed != 1) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-             "sample install");
-  DOCA_LOG_INFO("Random-sample pipe ready: mask 0x%04x", mask);
-  return pipe;
+  // TODO 4 -- your code here.
+  return NULL;
 }
 
 // PORT_DEMUX — the root pipe. Every packet entering PF0's eSwitch is looked up here first, and it
@@ -973,54 +779,8 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
 // The pipe-level forward is FWD_CHANGEABLE, which is DOCA's way of saying "each entry brings its
 // own" — that is what lets the two directions go different places.
 static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe *wire_target) {
-  struct doca_flow_match m = {0}, mm = {0};
-  struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_CHANGEABLE};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_DROP};
-  struct doca_flow_pipe_cfg *cfg;
-  struct doca_flow_pipe *pipe;
-  doca_error_t err;
-  m.parser_meta.port_id = UINT16_MAX;
-  mm.parser_meta.port_id = UINT16_MAX;
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "root cfg");
-  err = doca_flow_pipe_cfg_set_name(cfg, "PORT_DEMUX");
-  doca_check(err, "root name");
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "root type");
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "root dom");
-  err = doca_flow_pipe_cfg_set_is_root(cfg, true);
-  doca_check(err, "root root");
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 2);
-  doca_check(err, "root nr");
-  err = doca_flow_pipe_cfg_set_match(cfg, &m, &mm);
-  doca_check(err, "root match");
-  err = doca_flow_pipe_create(cfg, &fwd, &fwd_miss, &pipe);
-  doca_check(err, "root create");
-  doca_flow_pipe_cfg_destroy(cfg);
-  struct doca_flow_match em = {0};
-  struct doca_flow_fwd ef;
-  struct entry_batch_status st = {0};
-  struct doca_flow_pipe_entry *e;
-  em.parser_meta.port_id = 0;
-  memset(&ef, 0, sizeof(ef));
-  ef.type = DOCA_FLOW_FWD_PIPE;
-  ef.next_pipe = wire_target;
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &em, 0, NULL, NULL, &ef,
-                                       DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &st, &e);
-  doca_check(err, "root wire");
-  em.parser_meta.port_id = 1;
-  memset(&ef, 0, sizeof(ef));
-  ef.type = DOCA_FLOW_FWD_PORT;
-  ef.port_id = 0;
-  err = doca_flow_pipe_basic_add_entry(0, pipe, &em, 0, NULL, NULL, &ef,
-                                       DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &st, &e);
-  doca_check(err, "root sf");
-  err = doca_flow_entries_process(port, 0, 10000, 2);
-  doca_check(err, "root process");
-  doca_check((st.failure || st.nb_processed != 2) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-             "root install");
-  DOCA_LOG_INFO("Port demux ready");
+  // TODO 5 -- your code here.
+  return;
 }
 
 // Build the PF0 pipeline, and report back the handles the rest of the program needs. This is the

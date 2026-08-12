@@ -23,3 +23,13 @@ executable(DOCA_PREFIX + 'flow_ecn_pcap',
 	dependencies : app_dependencies + [pcap_dep],
 	include_directories : app_inc_dirs,
 	install: false)
+
+# flow_template is flow_ecn_pcap with the pipeline hollowed out — the participant exercise. It is
+# built alongside the solution rather than in place of it, so `diff doca_flow_template.c
+# doca_flow_ecn_pcap.c` is the answer key and both binaries are available during the session.
+executable(DOCA_PREFIX + 'flow_template',
+	['doca_flow_template.c'],
+	c_args : flow_c_args,
+	dependencies : app_dependencies + [pcap_dep],
+	include_directories : app_inc_dirs,
+	install: false)

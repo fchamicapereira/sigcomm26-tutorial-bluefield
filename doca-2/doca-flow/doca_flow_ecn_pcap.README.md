@@ -122,7 +122,7 @@ goodput** — the copy is made in eSwitch hardware; the original forwards unimpe
 - Point PCC at the uplink **PF** and RoCE at the **SF** — this program runs on PF0 (`mlx5_0`); traffic
   uses the SFs (`mlx5_2`/`mlx5_3`).
 
-Key source: [`doca_flow_ecn_pcap.c`](doca_flow_ecn_pcap.c) — `create_capture_pipe()` (mark + mirror),
-`create_random_sample_pipe()` (`--percent`), `create_rss_pipe()` / `setup_capture_mirror()` (the
+Key source: [`doca_flow_ecn_pcap.c`](doca_flow_ecn_pcap.c) — `create_forward_to_sf_pipe()` (mark + mirror),
+`create_sampling_pipe()` (`--percent`), `create_to_cpu_pipe()` / `bind_capture_mirror()` (the
 mirror→pcap path), and the `rte_eth_rx_burst` → `pcap_dump` loop with the SPACE/`--sample` gates in
 `main()`.

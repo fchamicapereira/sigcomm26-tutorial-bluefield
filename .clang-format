@@ -1,5 +1,5 @@
 BasedOnStyle: Google
-ColumnLimit: 140
+ColumnLimit: 100
 
 # Google style sorts #include blocks; this project cannot.
 # The DPA sources under doca-*/doca-pcc-ecn/device/ come from NVIDIA's PCC sample and are not

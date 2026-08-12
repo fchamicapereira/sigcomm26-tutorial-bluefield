@@ -37,8 +37,8 @@
 
 /**< Struct holding bytes and timestamp */
 struct bytes_ts_t {
-	uint32_t bytes; /* bytes */
-	uint32_t ts;	/* timestamp */
+  uint32_t bytes; /* bytes */
+  uint32_t ts;    /* timestamp */
 };
 
 /*
@@ -48,15 +48,14 @@ struct bytes_ts_t {
  * @smaller_num [in]: smaller int
  * @return: difference with wrap around
  */
-ALWAYS_INLINE uint32_t diff_with_wrap32(uint32_t greater_num, uint32_t smaller_num)
-{
-	uint32_t diff_res;
+ALWAYS_INLINE uint32_t diff_with_wrap32(uint32_t greater_num, uint32_t smaller_num) {
+  uint32_t diff_res;
 
-	if (unlikely(greater_num < smaller_num))
-		diff_res = UINT32_MAX - smaller_num + greater_num + 1; /* wrap around */
-	else
-		diff_res = greater_num - smaller_num;
-	return diff_res;
+  if (unlikely(greater_num < smaller_num))
+    diff_res = UINT32_MAX - smaller_num + greater_num + 1; /* wrap around */
+  else
+    diff_res = greater_num - smaller_num;
+  return diff_res;
 }
 
 #endif /* PCC_COMMON_DEV_H_ */
