@@ -9,6 +9,11 @@
 #   make clean           remove the generated .pdf files
 #
 # Requires pandoc and xelatex (TeX Live). Both are what the repo already assumes for docs/.
+#
+# Also the fonts acmart uses, since the guides are set in ACM's stack: Linux Libertine/Biolinum
+# and Inconsolata. Libertine comes with collection-xetex, so xelatex implies it, but Inconsolata
+# is in collection-fontsextra only -- on a smaller TeX Live, `tlmgr install inconsolata`.
+# template.tex says as much and stops with that line if the font is missing.
 
 PANDOC ?= pandoc
 ENGINE ?= xelatex

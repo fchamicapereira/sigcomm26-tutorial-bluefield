@@ -1,5 +1,5 @@
 ---
-title: Installing Tailscale
+title: "Pre-tutorial setup: Tailscale"
 ---
 
 <!--

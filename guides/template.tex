@@ -41,11 +41,25 @@ $common.latex()$
 % order while typing.
 \setcounter{secnumdepth}{0}
 
-% Headings in the same sans as the title block, and unindented paragraphs separated by space
-% rather than by indentation -- this is a set of instructions to scan, not prose to read.
-\titleformat{\section}{\sffamily\bfseries\Large}{}{0pt}{}
-\titleformat{\subsection}{\sffamily\bfseries\large}{}{0pt}{}
-\titleformat{\subsubsection}{\sffamily\bfseries\normalsize}{}{0pt}{}
+% Heading fonts copied from acmart's sigconf format -- the one SIGCOMM uses:
+%
+%   \def\@secfont{\bfseries\Large\section@raggedright}      bold SERIF, not sans
+%   \def\@subsecfont{\bfseries\Large\section@raggedright}
+%   \def\@subsubsecfont{\sffamily\itshape}                  sans italic
+%
+% Worth stating plainly because it is the opposite of what the sans title block suggests: only
+% manuscript/acmsmall set headings in sans. sigconf sets them in bold Libertine.
+%
+% One deliberate deviation. acmart gives \section and \subsection the SAME size and tells them
+% apart by their numbers; these guides run with secnumdepth=0 (see below), so equal sizes would
+% leave the two levels indistinguishable. \subsection therefore drops to \large.
+%
+% \raggedright matches acmart's \section@raggedright. It earns its place here: guide headings are
+% written as full sentences ("Step 1 -- Install the client", and longer), so they wrap, and a
+% justified wrapped heading comes out with stretched word spaces.
+\titleformat{\section}{\bfseries\Large\raggedright}{}{0pt}{}
+\titleformat{\subsection}{\bfseries\large\raggedright}{}{0pt}{}
+\titleformat{\subsubsection}{\sffamily\itshape\normalsize\raggedright}{}{0pt}{}
 \titlespacing*{\section}{0pt}{18pt}{6pt}
 \titlespacing*{\subsection}{0pt}{13pt}{4pt}
 \titlespacing*{\subsubsection}{0pt}{11pt}{3pt}
@@ -53,36 +67,61 @@ $common.latex()$
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{6pt}
 
-% TeX Gyre and Latin Modern ship with TeX Live everywhere, so these need no font installation and
-% no per-platform substitution.
+% ACM's font stack, as the acmart class itself sets it:
 %
-% Addressed by FILE name rather than family name ("TeX Gyre Pagella") on purpose: TeX Live does not
-% register its fonts with the operating system, so on a machine whose fontconfig/CoreText has never
-% heard of them -- macOS, out of the box -- a family-name lookup fails and the build dies at
+%   \RequirePackage[tt=false, type1=true]{libertine}   Linux Libertine (serif) + Linux Biolinum (sans)
+%   \RequirePackage[varqu]{zi4}                        Inconsolata (mono), with upright quotes
+%
+% All three ship with TeX Live, so they need no font installation and no per-platform
+% substitution. Math is deliberately left alone: acmart adds newtxmath, but no guide contains any,
+% and loading it under xelatex/fontspec buys nothing here.
+%
+% Addressed by FILE name rather than family name ("Linux Libertine O") on purpose: TeX Live does
+% not register its fonts with the operating system, so on a machine whose fontconfig/CoreText has
+% never heard of them -- macOS, out of the box -- a family-name lookup fails and the build dies at
 % \setmainfont. Filenames resolve through kpathsea, which always knows where TeX Live put them.
-\setmainfont{texgyrepagella}[
+\setmainfont{LinLibertine}[
   Extension      = .otf,
-  UprightFont    = *-regular,
-  BoldFont       = *-bold,
-  ItalicFont     = *-italic,
-  BoldItalicFont = *-bolditalic,
+  UprightFont    = *_R,
+  BoldFont       = *_RB,
+  ItalicFont     = *_RI,
+  BoldItalicFont = *_RBI,
 ]
-\setsansfont{texgyreheros}[
+% Biolinum has no true bold italic; _RBO is its bold OBLIQUE, which is what the libertine package
+% substitutes there too.
+\setsansfont{LinBiolinum}[
   Extension      = .otf,
-  UprightFont    = *-regular,
-  BoldFont       = *-bold,
-  ItalicFont     = *-italic,
-  BoldItalicFont = *-bolditalic,
+  UprightFont    = *_R,
+  BoldFont       = *_RB,
+  ItalicFont     = *_RI,
+  BoldItalicFont = *_RBO,
 ]
-% Latin Modern splits mono across two file stems: the roman/italic are lmmono10, the bold and
-% oblique only exist under lmmonolt10 ("light"), so they cannot be reached with a single wildcard.
-\setmonofont{lmmono10}[
-  Extension        = .otf,
-  UprightFont      = *-regular,
-  ItalicFont       = *-italic,
-  BoldFont         = lmmonolt10-bold,
-  BoldItalicFont   = lmmonolt10-boldoblique,
-  Scale            = MatchLowercase,
+% Inconsolata is the one piece of this stack that a working xelatex does not already guarantee.
+% TeX Live ships libertine in BOTH collection-fontsextra and collection-xetex, so any install able
+% to run this template has Linux Libertine and Biolinum; inconsolata is in collection-fontsextra
+% only. Say so, rather than letting fontspec fail with a bare "font cannot be found" that gives no
+% hint which package supplies it.
+\IfFontExistsTF{Inconsolatazi4-Regular.otf}{}{%
+  \errmessage{Inconsolata is missing -- run: tlmgr install inconsolata (it is ACM's monospace font,
+    and unlike the rest of this stack it is not part of collection-xetex)}%
+}
+% Inconsolata has NO italic at all -- its own inconsolata.fontspec declares only upright and bold,
+% and zi4's .fd files substitute the upright shape for it. Both italic slots are therefore mapped
+% explicitly to the real faces: that is what ACM effectively renders, and it keeps the build free
+% of "font shape undefined" warnings on every code comment. Tango sets comments in italic, so they
+% come out upright here and are told apart by colour alone, exactly as in an ACM paper.
+%
+% StylisticSet 3 is the OpenType equivalent of zi4's varqu option: it swaps in upright quotesingle,
+% quotedbl and grave. That matters in a document that is mostly shell commands -- a curly quote in
+% a command someone retypes does not work.
+\setmonofont{Inconsolatazi4}[
+  Extension      = .otf,
+  UprightFont    = *-Regular,
+  BoldFont       = *-Bold,
+  ItalicFont     = *-Regular,
+  BoldItalicFont = *-Bold,
+  StylisticSet   = 3,
+  Scale          = MatchLowercase,
 ]
 
 \definecolor{rule}{HTML}{C8C8C8}     % hairlines: the footer rule and the code-block frame
@@ -134,6 +173,9 @@ $for(institutions)$\registerinstitution{$institutions.id$}$endfor$
 % The rules above and below the header are one command, not two similar-looking literals, so they
 % cannot drift apart in weight or colour the next time either end is adjusted.
 \newcommand{\headerrule}{\rule{\textwidth}{2pt}\par}
+% Author names in sans, matching acmart's \@authorfont (\Large\sffamily for sigconf). Sans is
+% reserved throughout this template for the two things acmart uses it for -- the title and the
+% names -- and everything else is Libertine.
 \newcommand{\peoplerow}[1]{{\sffamily\small #1\par}}
 
 % Colour in the footer must be set with \textcolor, or inside an explicit group -- never with a
@@ -145,8 +187,8 @@ $for(institutions)$\registerinstitution{$institutions.id$}$endfor$
   \renewcommand{\headrulewidth}{0pt}
   \renewcommand{\footrulewidth}{0.4pt}
   \renewcommand{\footrule}{{\color{rule}\hrule height 0.4pt}}
-  \fancyfoot[L]{\textcolor{muted}{\footnotesize\sffamily $conference$ · $title$}}
-  \fancyfoot[R]{\textcolor{muted}{\footnotesize\sffamily \thepage}}
+  \fancyfoot[L]{\textcolor{muted}{\footnotesize $conference$ · $title$}}
+  \fancyfoot[R]{\textcolor{muted}{\footnotesize \thepage}}
 }
 \pagestyle{guide}
 
@@ -169,11 +211,18 @@ $endif$
   \headerrule
   \vspace{6pt}
 
-  {\sffamily\bfseries\Large $title$\par}
+  % \Huge\sffamily\bfseries is acmart's \@titlefont for sigconf, and the gap to \Large sections is
+  % the point of it -- the guide's own name has to outrank the step headings inside it. Both were
+  % \Large before, so the title merely tied with every section; that reads as an accident once the
+  % two are in different families, because Libertine at a given size looks larger than Biolinum.
+  {\sffamily\bfseries\Huge $title$\par}
 
-  \vspace{4pt}
-  {\sffamily\itshape\small $tutorial-title$\par}
-  {\sffamily\footnotesize\color{muted} $conference$\par}
+  \vspace{5pt}
+  % Not acmart's \LARGE subtitle: this line carries the whole tutorial name rather than a short
+  % second clause, so at \LARGE it wraps and competes with the title. \normalsize keeps it clearly
+  % subordinate while staying readable under a \Huge line.
+  {\itshape\normalsize $tutorial-title$\par}
+  {\footnotesize\color{muted} $conference$\par}
 
   \vspace{5pt}
 $if(presenters)$
@@ -185,7 +234,7 @@ $endif$
 
 $if(institutions)$
   \vspace{3pt}
-  {\footnotesize\sffamily\color{muted}$for(institutions)$\affilmark{$institutions.id$}~$institutions.name$$sep$ \quad $endfor$\par}
+  {\footnotesize\color{muted}$for(institutions)$\affilmark{$institutions.id$}~$institutions.name$$sep$ \quad $endfor$\par}
 $endif$
 
   \vspace{6pt}
