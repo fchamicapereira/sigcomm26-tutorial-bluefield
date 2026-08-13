@@ -32,7 +32,25 @@
 $common.latex()$
 
 % After common.latex, so hyperref loads last as it expects to.
-\usepackage[hidelinks]{hyperref}
+%
+% Deliberately NOT [hidelinks]. Every link in these guides is a download page or a fallback package
+% the reader is meant to click, and hidden links are typeset as ordinary prose -- indistinguishable
+% from the text around them, so nothing tells the reader they are there at all.
+%
+% Coloured rather than framed: hyperref's default is a box around each link, which is fine on screen
+% and prints as a stray rectangle. The two colours are acmart's own -- ACMDarkBlue for external URLs
+% and ACMPurple for internal references -- so a guide read next to the SIGCOMM papers matches them.
+% Both are defined here because acmart itself is not loaded (see the font stack below, which copies
+% from it for the same reason).
+\usepackage{hyperref}
+\definecolor{ACMDarkBlue}{cmyk}{1,0.58,0,0.21}
+\definecolor{ACMPurple}{cmyk}{0.55,1,0,0.15}
+\hypersetup{
+  colorlinks = true,
+  urlcolor   = ACMDarkBlue,
+  linkcolor  = ACMPurple,
+  citecolor  = ACMPurple,
+}
 
 \geometry{margin=2.4cm,top=2.0cm,bottom=2.2cm}
 
