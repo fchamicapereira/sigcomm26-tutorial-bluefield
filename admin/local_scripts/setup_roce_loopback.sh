@@ -34,6 +34,7 @@ PF1_PCI="${PF1_PCI:-0000:03:00.1}"
 
 SF0_REP=en3f0pf0sf0;  SF0_NETDEV=enp3s0f0s0;  SF0_RDMA=mlx5_2   # receiver / server (NP), on PF0
 SF1_REP=en3f1pf1sf0;  SF1_NETDEV=enp3s0f1s0;  SF1_RDMA=mlx5_3   # sender   / client (RP), on PF1
+SF2_NUM=4; SF2_REP="en3f0pf0sf${SF2_NUM}"; SF2_NETDEV="enp3s0f0s${SF2_NUM}"; SF2_RDMA=mlx5_4
 
 # Pin each SF's hardware address rather than letting the firmware pick one. An SF created without
 # -m can come up with hw_addr 00:00:00:00:00:00, and since the RDMA node GUID is derived from it, a
@@ -49,12 +50,13 @@ SF1_REP=en3f1pf1sf0;  SF1_NETDEV=enp3s0f1s0;  SF1_RDMA=mlx5_3   # sender   / cli
 la_mac_from() {
   local base first
   base=$(cat "/sys/class/net/$1/address") || return 1
-  first=$(printf '%02x' "$(( 0x${base%%:*} | 0x02 ))")
+  first=$(printf '%02x' "$(( (0x${base%%:*} | 0x02) ^ ${2:-0} ))")
   echo "${first}:${base#*:}"
 }
 
 NS0=ns0;  IP0=10.0.0.1/24
 NS1=ns1;  IP1=10.0.0.2/24
+NS2=ns0_1; IP2=10.0.0.11/24
 RECEIVER_IP=${IP0%/*}
 
 BR0=ovsbr1;  BR1=ovsbr2
@@ -73,14 +75,16 @@ done
 
 SF0_MAC=$(la_mac_from p0) || die "could not read p0's MAC address."
 SF1_MAC=$(la_mac_from p1) || die "could not read p1's MAC address."
+SF2_MAC=$(la_mac_from p0 4) || die "could not derive a distinct MAC for PF0 sfnum ${SF2_NUM}."
 # A burned-in vendor address never has the locally-administered bit set, so the derived address is
 # always distinct from the uplink's. Check anyway rather than silently duplicating a MAC.
 [ "$SF0_MAC" != "$(cat /sys/class/net/p0/address)" ] || die "derived SF0 MAC ${SF0_MAC} collides with p0's own address."
 [ "$SF1_MAC" != "$(cat /sys/class/net/p1/address)" ] || die "derived SF1 MAC ${SF1_MAC} collides with p1's own address."
+[ "$SF2_MAC" != "$SF0_MAC" ] || die "derived SF2 MAC ${SF2_MAC} collides with SF0."
 
 # --- 1. tear everything down --------------------------------------------------------------------
-echo "== tearing down namespaces ${NS0}, ${NS1} (returns their SFs to the default namespace) =="
-for ns in "$NS0" "$NS1"; do
+echo "== tearing down namespaces ${NS0}, ${NS1}, ${NS2} (returns their SFs to the default namespace) =="
+for ns in "$NS0" "$NS1" "$NS2"; do
   $SUDO ip netns del "$ns" 2>/dev/null || true
 done
 sleep 1
@@ -93,7 +97,7 @@ done
 
 echo "== deleting every SF on ${PF0_PCI} and ${PF1_PCI} =="
 # An SF's RDMA device index (mlx5_N) is handed out in probe order, not derived from its sfnum, so
-# the only way to land on a predictable mlx5_2/mlx5_3 is to start from zero SFs and create ours in
+# the only way to land on a predictable mlx5_2/mlx5_3/mlx5_4 is to start from zero SFs and create ours in
 # a fixed order. That is also why this deletes SFs it did not create.
 for idx in $($SUDO mlnx-sf -a show 2>/dev/null | awk '/^SF Index:/ {print $3}'); do
   case "$idx" in
@@ -106,42 +110,45 @@ done
 sleep 2
 
 # --- 2. build the SFs ---------------------------------------------------------------------------
-# PF0 first, then PF1: the RDMA indices follow creation order, giving mlx5_2 then mlx5_3.
-echo "== creating one SF per PF (sfnum 0 on each) =="
+# Creation order gives the three SFs RDMA indices mlx5_2, mlx5_3, then mlx5_4.
+echo "== creating PF0 sfnum 0 and 4, and PF1 sfnum 0 =="
 echo "   receiver MAC ${SF0_MAC} (from p0), sender MAC ${SF1_MAC} (from p1)"
 $SUDO mlnx-sf -a create -d "$PF0_PCI" -n 0 -m "$SF0_MAC" -t || die "could not create the SF on PF0 (${PF0_PCI})."
 $SUDO mlnx-sf -a create -d "$PF1_PCI" -n 0 -m "$SF1_MAC" -t || die "could not create the SF on PF1 (${PF1_PCI}).
        If this DPU has never had an SF on PF1, check that PF1 is in switchdev mode:
          sudo devlink dev eswitch show pci/${PF1_PCI}"
+$SUDO mlnx-sf -a create -d "$PF0_PCI" -n "$SF2_NUM" -m "$SF2_MAC" -t || die "could not create sfnum ${SF2_NUM} on PF0 (${PF0_PCI})."
 
 echo "== waiting for the SF netdevs and RDMA devices to appear =="
 for _ in $(seq 1 30); do
-  if [ -e "/sys/class/net/$SF0_NETDEV" ] && [ -e "/sys/class/net/$SF1_NETDEV" ] \
-     && [ -e "/sys/class/net/$SF0_REP" ] && [ -e "/sys/class/net/$SF1_REP" ] \
+  if [ -e "/sys/class/net/$SF0_NETDEV" ] && [ -e "/sys/class/net/$SF1_NETDEV" ] && [ -e "/sys/class/net/$SF2_NETDEV" ] \
+     && [ -e "/sys/class/net/$SF0_REP" ] && [ -e "/sys/class/net/$SF1_REP" ] && [ -e "/sys/class/net/$SF2_REP" ] \
      && rdma link show "${SF0_RDMA}/1" >/dev/null 2>&1 \
-     && rdma link show "${SF1_RDMA}/1" >/dev/null 2>&1; then
+     && rdma link show "${SF1_RDMA}/1" >/dev/null 2>&1 \
+     && rdma link show "${SF2_RDMA}/1" >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
 
 # Assert the exact layout. Everything below, and every command line in the README, depends on it.
-for n in "$SF0_REP" "$SF1_REP" "$SF0_NETDEV" "$SF1_NETDEV"; do
+for n in "$SF0_REP" "$SF1_REP" "$SF2_REP" "$SF0_NETDEV" "$SF1_NETDEV" "$SF2_NETDEV"; do
   [ -e "/sys/class/net/$n" ] || die "expected netdev '${n}' was not created.
        Got instead:
 $(ls /sys/class/net | grep -E '^(en3f|enp3s)' | sed 's/^/         /')"
 done
-for r in "$SF0_RDMA" "$SF1_RDMA"; do
+for r in "$SF0_RDMA" "$SF1_RDMA" "$SF2_RDMA"; do
   rdma link show "${r}/1" >/dev/null 2>&1 || die "expected RDMA device '${r}' was not created.
        Got instead:
 $(rdma link show 2>/dev/null | awk '{print $2}' | sed 's|/1||' | sed 's/^/         /')
        RDMA indices are assigned in probe order. If stale SFs from an earlier run are still
-       holding mlx5_2/mlx5_3, reboot the DPU and re-run this script."
+       holding mlx5_2/mlx5_3/mlx5_4, reboot the DPU and re-run this script."
 done
 # Confirm each SF really landed on the PF we asked for (a wrong-PF sender never reaches the wire).
 sf_parent() { basename "$(dirname "$(readlink -f "/sys/class/net/$1/device")")"; }
 [ "$(sf_parent "$SF0_NETDEV")" = "$PF0_PCI" ] || die "${SF0_NETDEV} is on $(sf_parent "$SF0_NETDEV"), expected PF0 ${PF0_PCI}."
 [ "$(sf_parent "$SF1_NETDEV")" = "$PF1_PCI" ] || die "${SF1_NETDEV} is on $(sf_parent "$SF1_NETDEV"), expected PF1 ${PF1_PCI}."
+[ "$(sf_parent "$SF2_NETDEV")" = "$PF0_PCI" ] || die "${SF2_NETDEV} is on $(sf_parent "$SF2_NETDEV"), expected PF0 ${PF0_PCI}."
 
 echo "   receiver: PF0 sf0  ${SF0_NETDEV} (${SF0_RDMA})  rep ${SF0_REP}"
 echo "   sender:   PF1 sf0  ${SF1_NETDEV} (${SF1_RDMA})  rep ${SF1_REP}"
@@ -155,13 +162,14 @@ $SUDO ovs-vsctl add-br "$BR0"
 $SUDO ovs-vsctl add-port "$BR0" p0
 $SUDO ovs-vsctl add-port "$BR0" pf0hpf
 $SUDO ovs-vsctl add-port "$BR0" "$SF0_REP"
+$SUDO ovs-vsctl add-port "$BR0" "$SF2_REP"
 
 $SUDO ovs-vsctl add-br "$BR1"
 $SUDO ovs-vsctl add-port "$BR1" p1
 $SUDO ovs-vsctl add-port "$BR1" pf1hpf
 $SUDO ovs-vsctl add-port "$BR1" "$SF1_REP"
 
-for i in p0 p1 pf0hpf pf1hpf "$SF0_REP" "$SF1_REP" "$BR0" "$BR1"; do
+for i in p0 p1 pf0hpf pf1hpf "$SF0_REP" "$SF1_REP" "$SF2_REP" "$BR0" "$BR1"; do
   $SUDO ip link set "$i" up
 done
 
@@ -172,9 +180,10 @@ $SUDO /opt/mellanox/dpdk/bin/dpdk-hugepages.py --reserve 4G
 # --- 5. namespaces ------------------------------------------------------------------------------
 # They stop the Linux kernel from delivering 10.0.0.1 <-> 10.0.0.2 locally — both IPs sit on this
 # one host, so without isolation the kernel short-circuits them and RoCE never touches the wire.
-echo "== creating namespaces ${NS0}, ${NS1} =="
+echo "== creating namespaces ${NS0}, ${NS1}, ${NS2} =="
 $SUDO ip netns add "$NS0"
 $SUDO ip netns add "$NS1"
+$SUDO ip netns add "$NS2"
 
 echo "== moving each SF's RDMA device + netdev into its namespace =="
 # rdma runs in netns-exclusive mode, so the rdma dev and its netdev must both move.
@@ -182,8 +191,10 @@ $SUDO rdma dev set "$SF0_RDMA" netns "$NS0"
 $SUDO ip link set "$SF0_NETDEV" netns "$NS0"
 $SUDO rdma dev set "$SF1_RDMA" netns "$NS1"
 $SUDO ip link set "$SF1_NETDEV" netns "$NS1"
+$SUDO rdma dev set "$SF2_RDMA" netns "$NS2"
+$SUDO ip link set "$SF2_NETDEV" netns "$NS2"
 
-echo "== configuring ${NS0} (receiver ${IP0%/*}) and ${NS1} (sender ${IP1%/*}) =="
+echo "== configuring ${NS0}, ${NS1}, and ${NS2} (${IP2%/*}) =="
 $SUDO ip netns exec "$NS0" ip link set lo up
 $SUDO ip netns exec "$NS0" ip link set "$SF0_NETDEV" up
 $SUDO ip netns exec "$NS0" ip addr add "$IP0" dev "$SF0_NETDEV"
@@ -192,12 +203,19 @@ $SUDO ip netns exec "$NS1" ip link set lo up
 $SUDO ip netns exec "$NS1" ip link set "$SF1_NETDEV" up
 $SUDO ip netns exec "$NS1" ip addr add "$IP1" dev "$SF1_NETDEV"
 
+$SUDO ip netns exec "$NS2" ip link set lo up
+$SUDO ip netns exec "$NS2" ip link set "$SF2_NETDEV" up
+$SUDO ip netns exec "$NS2" ip addr add "$IP2" dev "$SF2_NETDEV"
+
 RECEIVER_MAC=$($SUDO ip -n "$NS0" link show "$SF0_NETDEV" | awk '/link\/ether/ {print $2}')
 SENDER_MAC=$($SUDO ip -n "$NS1" link show "$SF1_NETDEV" | awk '/link\/ether/ {print $2}')
 [ -n "$RECEIVER_MAC" ] && [ -n "$SENDER_MAC" ] || die "could not read the SF MAC addresses."
 
 echo "== pinning sender's neighbor for ${RECEIVER_IP} to ${SF0_NETDEV}'s MAC ${RECEIVER_MAC} =="
 $SUDO ip netns exec "$NS1" ip neigh replace "$RECEIVER_IP" lladdr "$RECEIVER_MAC" dev "$SF1_NETDEV" nud permanent
+echo "== checking connectivity from ${NS1} to both receivers =="
+$SUDO ip netns exec "$NS1" ping -c 2 "$RECEIVER_IP"
+$SUDO ip netns exec "$NS1" ping -c 2 "${IP2%/*}"
 
 # --- 6. keep the loopback off the flood path ----------------------------------------------------
 # Left alone, ${BR1} has never seen the receiver's MAC as a *source*, so every frame the sender
@@ -223,22 +241,27 @@ echo "== verifying =="
 fail=0
 check() { if [ "$2" = "$3" ]; then echo "   ok    $1"; else echo "   FAIL  $1: expected '$2', got '$3'" >&2; fail=1; fi; }
 
-check "${BR0} members" "en3f0pf0sf0 p0 pf0hpf" \
+check "${BR0} members" "$SF0_REP $SF2_REP p0 pf0hpf" \
       "$($SUDO ovs-vsctl list-ports "$BR0" | grep -v "^${BR0}$" | sort | tr '\n' ' ' | sed 's/ $//')"
 check "${BR1} members" "en3f1pf1sf0 p1 pf1hpf" \
       "$($SUDO ovs-vsctl list-ports "$BR1" | grep -v "^${BR1}$" | sort | tr '\n' ' ' | sed 's/ $//')"
 check "${NS0} RDMA dev" "$SF0_RDMA" "$($SUDO ip netns exec "$NS0" rdma dev show 2>/dev/null | awk 'NR==1{sub(/:$/,"",$2); print $2}')"
 check "${NS1} RDMA dev" "$SF1_RDMA" "$($SUDO ip netns exec "$NS1" rdma dev show 2>/dev/null | awk 'NR==1{sub(/:$/,"",$2); print $2}')"
+check "${NS2} RDMA dev" "$SF2_RDMA" "$($SUDO ip netns exec "$NS2" rdma dev show 2>/dev/null | awk 'NR==1{sub(/:$/,"",$2); print $2}')"
 check "${NS0} address"  "$RECEIVER_IP" \
       "$($SUDO ip netns exec "$NS0" ip -4 -br addr show "$SF0_NETDEV" | awk '{print $3}' | cut -d/ -f1)"
 check "${NS1} address"  "${IP1%/*}" \
       "$($SUDO ip netns exec "$NS1" ip -4 -br addr show "$SF1_NETDEV" | awk '{print $3}' | cut -d/ -f1)"
+check "${NS2} address" "${IP2%/*}" \
+      "$($SUDO ip netns exec "$NS2" ip -4 -br addr show "$SF2_NETDEV" | awk '{print $3}' | cut -d/ -f1)"
 check "sender neigh pinned" "$RECEIVER_MAC" \
       "$($SUDO ip netns exec "$NS1" ip neigh show "$RECEIVER_IP" | awk '{for(i=1;i<NF;i++) if($i=="lladdr") print $(i+1)}')"
 check "${NS0} SF MAC" "$SF0_MAC" "$RECEIVER_MAC"
 check "${NS1} SF MAC" "$SF1_MAC" "$SENDER_MAC"
+check "${NS2} SF MAC" "$SF2_MAC" \
+      "$($SUDO ip -n "$NS2" link show "$SF2_NETDEV" | awk '/link\/ether/ {print $2}')"
 # The RDMA node GUID is derived from the SF's hw_addr; a zero GUID breaks RoCE connection setup.
-for pair in "${NS0}|${SF0_RDMA}" "${NS1}|${SF1_RDMA}"; do
+for pair in "${NS0}|${SF0_RDMA}" "${NS1}|${SF1_RDMA}" "${NS2}|${SF2_RDMA}"; do
   ns=${pair%%|*}; rd=${pair##*|}
   guid=$($SUDO ip netns exec "$ns" rdma dev show "$rd" 2>/dev/null \
          | awk '{for(i=1;i<NF;i++) if($i=="node_guid") print $(i+1)}')
@@ -259,6 +282,7 @@ HP=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
 echo
 echo "== done =="
 echo "  ${NS0} (receiver ${RECEIVER_IP}, ${RECEIVER_MAC}):"; $SUDO ip netns exec "$NS0" rdma dev show
+echo "  ${NS2} (additional receiver ${IP2%/*}, ${SF2_MAC}):"; $SUDO ip netns exec "$NS2" rdma dev show
 echo "  ${NS1} (sender   ${IP1%/*}, ${SENDER_MAC}):"; $SUDO ip netns exec "$NS1" rdma dev show
 echo
 echo "Next: build (see README), then"
