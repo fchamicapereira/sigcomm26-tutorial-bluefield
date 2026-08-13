@@ -3,9 +3,10 @@
 # Print the DOCA version installed on this machine, normalized to MAJOR.MINOR (e.g. "2.9").
 #
 # This is the single source of truth for "which DOCA is this box running", and it decides which
-# doca-*/ directory a machine builds from. The mapping is NOT mechanical: one directory can serve
-# several minor releases — doca-2/ covers every DOCA 2.x, and its doca_flow_compat.h switches on
-# DOCA_VERSION_MINOR at compile time for the places where 2.7 and 2.9 genuinely disagree.
+# doca-*/ directory a machine builds from. The mapping is NOT mechanical: one directory serves a
+# whole major — doca-2/ covers every DOCA 2.x and doca-3/ every DOCA 3.x — and its
+# doca_flow_compat.h switches on DOCA_VERSION_MINOR at compile time for the places where the minors
+# genuinely disagree (2.7 vs 2.9, and 3.1 vs 3.2+).
 # MAJOR.MINOR is still what gets printed, because the minor is exactly what those compile-time
 # switches key on, so "which minor" remains worth knowing even when the directory is shared.
 #

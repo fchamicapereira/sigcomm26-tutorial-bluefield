@@ -1,4 +1,4 @@
-# `doca_flow_template` — build the ECN-marking pipeline yourself (DOCA 3.4)
+# `doca_flow_template` — build the ECN-marking pipeline yourself (DOCA 3.x)
 
 This is [`doca_flow_ecn_pcap.c`](doca_flow_ecn_pcap.c) with the DOCA Flow pipeline removed. Your job
 is to put it back: five functions, marked `TODO 1`–`TODO 5` in
@@ -60,7 +60,7 @@ on UDP.
 
 ### TODO 2 — `create_flood_pipe`
 How a packet reaches both the receiver and the pcap. DOCA Flow 3.2 removed the shared mirror the
-2.x build used, so 3.4 does this with a `DOCA_FLOW_PIPE_HASH` pipe running
+2.x build used, so 3.x does this with a `DOCA_FLOW_PIPE_HASH` pipe running
 `DOCA_FLOW_PIPE_HASH_MAP_ALGORITHM_FLOODING`, which delivers every packet to *all* of its entries
 instead of hashing to one.
 
@@ -116,7 +116,7 @@ they queue both entries and push them to hardware in one batch.
 ## Building and running
 
 ```bash
-cd doca-3.4 && meson setup build && ninja -C build
+cd doca-3 && meson setup build && ninja -C build
 sudo ./build/doca-flow/doca_flow_template -- --pcap /tmp/out.pcap --percent 100
 ```
 

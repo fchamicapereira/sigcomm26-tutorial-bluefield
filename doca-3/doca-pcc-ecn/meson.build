@@ -19,9 +19,10 @@ run_command(device_build_script,
 	app_name,
 	check: true)
 
-# Unlike DOCA 2.x, dpacc's own archive holds only the device object -- the host-side stubs are
-# generated as C and archived separately by build_device_code.sh, into the keep directory below.
-# That is the archive the executable must link.
+# On the DOCA 3.2+ toolchain dpacc's own archive holds only the device object -- the host-side
+# stubs are generated as C and archived separately by build_device_code.sh, into the keep directory
+# below. On 3.1 (and 2.x) dpacc emits one complete archive instead, and the script copies it here.
+# Either way this is the directory holding the archive the executable must link.
 device_stubs_dir = device_build_dir / app_name
 pcc_ecn_rp_app_lib = meson.get_compiler('c').find_library(app_name, dirs: device_stubs_dir, static: true)
 

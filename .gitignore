@@ -6,3 +6,4 @@ doca-pcc-ecn/app
 ttyplot
 admin/results
 *.pcap
+.DS_Store

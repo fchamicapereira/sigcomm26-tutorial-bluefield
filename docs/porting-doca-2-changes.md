@@ -4,18 +4,18 @@ Written 2026-08-12. `doca-2/doca-flow/` was reworked to carry both the solution 
 exercise. Some of the work landed in every tree, some only in `doca-2`. This is the record of what
 went where, and how to repeat it.
 
-**Status: the port is done.** The [`doca-3` unification](doca-3-unification.md) landed first, so
-`doca-3.2/` is gone and `doca-2/` and `doca-3.4/` are the only two trees. Everything below has now
-been applied to `doca-3.4/doca-flow/` as well; the sections are kept as the record of *what* was
+**Status: the port is done.** The `doca-3` unification landed first, so
+`doca-3.2/` is gone and `doca-2/` and `doca-3/` are the only two trees. Everything below has now
+been applied to `doca-3/doca-flow/` as well; the sections are kept as the record of *what* was
 changed and *why*, and as the recipe for any future tree. See
-[What `doca-3.4` required differently](#what-doca-34-required-differently) for the deltas that are
+[What `doca-3` required differently](#what-doca-3-required-differently) for the deltas that are
 forced by the DOCA version.
 
 ## Already applied everywhere
 
 | change | where |
 | --- | --- |
-| `crash_if_unsuccessful` → `doca_check` | `doca-2`, `doca-3.2`, `doca-3.4` — all 348 call sites (`doca-3.2` has since been removed) |
+| `crash_if_unsuccessful` → `doca_check` | `doca-2`, `doca-3.2`, `doca-3` — all 348 call sites (`doca-3.2` has since been removed) |
 | clang-format `ColumnLimit: 140` → `100` | all 24 `.c`/`.h` files in the repo |
 
 Both were mechanical. The rename kept the `__attribute__((format(printf, 2, 3)))` on the helper,
@@ -28,9 +28,9 @@ future rename, by deliberately breaking one call and checking the warning still 
 
 The 17-line `/* ... */` banner at the top of `doca_flow_ecn_pcap.c` is gone; the file now starts at
 `#include <doca_argp.h>`. The topology diagram it carried still lives in
-`doca_flow_ecn_pcap.README.md`. Same treatment applied to both `doca-3.4` files.
+`doca_flow_ecn_pcap.README.md`. Same treatment applied to both `doca-3` files.
 
-`doca-3.4` had no `doca_flow_ecn_pcap.README.md`, so dropping its banner would have deleted the
+`doca-3` had no `doca_flow_ecn_pcap.README.md`, so dropping its banner would have deleted the
 only copy of that program's topology diagram and of the "how this differs from 2.x" notes. The
 README was written for it (modelled on doca-2's, plus a table of the version deltas) before the
 banner came out. **Check the README exists before deleting a banner in any future tree.**
@@ -86,7 +86,7 @@ Exactly one idiom is exempt, and it is a hard constraint rather than a preferenc
 | --- | --- | --- |
 | argument names at call sites | `create_fwd_pipe(port, 1, /*with_counter=*/true)` | mid-expression — `//` would comment out the rest of the line, including the closing paren |
 
-Applied to all of `doca-2/doca-flow/` and all of `doca-3.4/doca-flow/`: `doca_flow_ecn_pcap.c`,
+Applied to all of `doca-2/doca-flow/` and all of `doca-3/doca-flow/`: `doca_flow_ecn_pcap.c`,
 `doca_flow_nop.c`, `doca_flow_compat.h`, and the template regenerated from the solution. **Not**
 applied to either `doca-pcc-ecn/` tree.
 
@@ -100,11 +100,13 @@ grep -n '/\*' doca-*/doca-flow/*.c doca-*/doca-flow/*.h   # expect only /*with_c
 `doca_flow_compat.h` was the one file where converting it risked *widening* a divergence:
 `meson.build` claims it is identical in every `doca-*/` directory "on purpose", and the copies also
 differed in `#include` ordering. With `doca-3.2/` gone there were only two left, so doca-2's
-converted version was copied verbatim over `doca-3.4`'s and the two are now byte-identical — the
+converted version was copied verbatim over `doca-3`'s and the two are now byte-identical — the
 claim in `meson.build` is true again. Keep it that way: copy, do not re-convert independently.
 
-Note the macro `DOCA_TUT_MIRROR_SET_ORIG_FWD` is dead code in `doca-3.4` (3.4 has no mirror at all).
-It stays only to keep the file identical across trees, which is the stated policy.
+Note the macro `DOCA_TUT_MIRROR_SET_ORIG_FWD` is dead code in `doca-3`: nothing there uses the
+mirror. On 3.2+ it could not — the mirror is gone from the API — while 3.1 still has it and simply
+does not use it, so that one source builds on every 3.x. The macro stays only to keep the file
+identical across trees, which is the stated policy.
 
 The conversion is scriptable, in two passes: first move trailing comments onto their own line (the
 converter below), then fold every `/* ... */` block into consecutive `//` lines. Always verify by
@@ -233,7 +235,7 @@ clang-format -i doca_flow_template.c
 diff -u doca_flow_ecn_pcap.c doca_flow_template.c   # expect only the five bodies
 ```
 
-For `doca-3.4` the capture path is a **hash-flooding pipe**, not a shared mirror, so the function
+For `doca-3` the capture path is a **hash-flooding pipe**, not a shared mirror, so the function
 list differs — `create_flood_pipe` replaces `bind_capture_mirror` as TODO 2, and there is no
 `MIRROR_ID` binding to write. The exercise is otherwise the same shape, and the substitution in the
 recipe above is the only change needed:
@@ -246,7 +248,7 @@ for name, n, ret in [("create_to_cpu_pipe", 1, "  return NULL;"),
                      ("create_root_pipe", 5, "  return;")]:
 ```
 
-Note TODO 2 returns `NULL` here rather than being `void`, so `doca-3.4` has one `void` stub where
+Note TODO 2 returns `NULL` here rather than being `void`, so `doca-3` has one `void` stub where
 `doca-2` has two. The "two lines per body" invariant still holds either way.
 
 One gotcha seen while reformatting: clang-format never re-joins adjacent string literals, so if the
@@ -254,13 +256,13 @@ solution and template were split at different points by an earlier column limit,
 different. Regenerating the template from the freshly formatted solution fixes it; reformatting the
 two files independently does not.
 
-## What `doca-3.4` required differently
+## What `doca-3` required differently
 
 Everything else was ported verbatim — same comments, same function order, same structure. These are
 the only divergences, and each is forced by the DOCA version. `doca_flow_ecn_pcap.README.md` carries
 the same table for tutorial readers.
 
-| | `doca-2` | `doca-3.4` |
+| | `doca-2` | `doca-3` |
 | --- | --- | --- |
 | copy to the pcap | shared mirror via `monitor.shared_mirror_id` | `DOCA_FLOW_PIPE_HASH` + `..._ALGORITHM_FLOODING` |
 | SF representor | DPDK port index as a devargs string | `doca_dev_rep` from `doca_devinfo_rep_create_list` |
@@ -278,12 +280,60 @@ Two consequences worth remembering:
   *type* (`FWD_PIPE`), so entry 0 reaches the SF *through* `PASSTHROUGH` rather than via `FWD_PORT`.
   That makes `PASSTHROUGH` a dependency of `FLOOD`, so it has to exist before it. In `doca-2` the
   mirror imposes no such ordering and it is built after the capture path.
-- **`doca-3.4/doca_flow_nop.c` regained `--sf-num`.** It had drifted: no `--sf-num` flag, no
+- **`doca-3/doca_flow_nop.c` regained `--sf-num`.** It had drifted: no `--sf-num` flag, no
   `find_sf_representor_port_id`, hardcoded ring sizes, `create_port_demux_pipe` instead of
   `create_root_pipe`. All of that came back from `doca-2`. Its `open_sf_representor` now selects the
   representor whose SF index equals `--sf-num` instead of taking the first one with any SF index —
   identical behaviour on a `setup_roce_loopback.sh` DPU (one SF, sfnum 0), but **this specific
   change is untested on hardware.**
+
+## `doca-3/` covers every DOCA 3.x
+
+Added after the port, so the exercise could be tested on `bf3-uwashington-1`/`-2` while the only 3.4
+machine was busy. The directory was called `doca-3.4/` until this landed and was renamed once it
+served more than one release — it now stands in the same relationship to DOCA 3.x that `doca-2/`
+does to 2.7 and 2.9, and `test_tutorial.sh` maps every `3.*` to it.
+
+`run_container.sh` takes the directory suffix as its argument and discovers the available ones from
+`doca-*/`, so the invocation is now `./run_container.sh 3`; `./run_container.sh 3.4` no longer
+exists.
+
+The capture path did **not** have to change: `DOCA_FLOW_PIPE_HASH_MAP_ALGORITHM_FLOODING`,
+`doca_flow_pipe_cfg_set_hash_map_algorithm`, `DOCA_FLOW_FWD_HASH_PIPE` and
+`doca_flow_pipe_hash_add_entry` all exist in 3.1, and `struct doca_flow_fwd` is identical between
+the two releases. So is `parser_meta.port_id`, and so are `port_cfg_set_port_id`,
+`..._set_actions_mem_size` and `..._set_dev_rep`. 3.1 still has the shared mirror, but flooding
+works there, so both releases run the same code.
+
+Three shims in `doca_flow_compat.h` cover the whole difference:
+
+| | DOCA 3.1 | DOCA 3.2+ |
+| --- | --- | --- |
+| basic entry | `doca_flow_pipe_add_entry`, index in `doca_flow_actions.action_idx` | `doca_flow_pipe_basic_add_entry`, `action_idx` argument |
+| hash entry | `doca_flow_pipe_hash_add_entry`, no `action_idx`, `flags` is an enum | same name, plus `action_idx`, `flags` is `uint32_t` |
+| entry flags | `DOCA_FLOW_NO_WAIT` = 0, `DOCA_FLOW_WAIT_FOR_BATCH` = 1 | `DOCA_FLOW_ENTRY_FLAGS_NO_WAIT` = 1, `..._WAIT_FOR_BATCH` = 2 |
+
+The flag **values** differ as well as the names, so the shim maps by name and never by number. The
+hash-entry wrapper is defined under its own name and aliased with a `#define` afterwards, because
+the 3.4 name collides with the real 3.1 function.
+
+### The DPA toolchain, which was the harder half
+
+`doca-pcc-ecn` needed a build change, not a code change. DOCA 3.2 introduced
+`dpa-app-attributes2blob` and dpacc's `--dpa-proc-attr`; **3.1 has neither** — its dpacc does not
+list `--dpa-proc-attr` at all. It behaves like the 2.x toolchain: one archive out of dpacc that
+already exports `pcc_ecn_rp_app`, with no separate host-stub archiving step.
+
+`build_device_code.sh` now picks its path from whether `dpa-app-attributes2blob` is present, the
+same "check the filesystem, not a version string" rule the DPA-library choice already used. Both
+paths leave the linkable archive at `${KEEP_DIR}/${APP_NAME}.a`, so `meson.build` does not have to
+know which toolchain ran. The device sources themselves compile unmodified on 3.1.
+
+A first attempt made `doca-pcc-ecn` *skip* itself on 3.1 instead. That was wrong and was reverted —
+worth recording because the failure mode is not obvious: `run_command(check: true)` fails at
+**configure** time, so an unbuildable PCC app takes `doca-flow/` down with it and nothing at all
+builds on that box. If a future release does need skipping, skip it in `meson.build` with
+`subdir_done()`, never by letting `run_command` fail.
 
 ## Verification status
 
@@ -291,21 +341,46 @@ Two consequences worth remembering:
 | --- | --- | --- | --- |
 | `doca-2` solution | yes, 0 warnings | yes | **passes** — 92.59 → 0.08 Gb/s, 7314/7314 CE |
 | `doca-2` template | yes, 0 warnings | yes — counters at 0, blackholes traffic (see below) | n/a |
-| `doca-3.4` solution | yes, 0 warnings | not run | never |
-| `doca-3.4` template | yes, 0 warnings | not run | never |
-| `doca-3.4` nop | yes, 0 warnings | **not run since the port** | never |
+| `doca-3` on DOCA 3.1 | yes, 0 warnings — all 4 targets incl. dpacc | yes | **passes** — 184.41 → 0.08 Gb/s, 15114/15114 CE |
+| `doca-3` on DOCA 3.4 | yes, 0 warnings — all 4 targets incl. dpacc | not run | never |
 
-`bf3-uwaterloo-1` is the only DOCA 3.4 machine in the fleet, and it was in use, so the 3.4 build was
-verified by compiling only — `doca-3.4/meson.build` plus `doca-3.4/doca-flow/` copied to a scratch
-directory on that host and built there, leaving its checkout untouched. All three targets linked
-with zero warnings. `doca-pcc-ecn` was excluded (meson skips a missing app directory with a
-warning); it is unchanged by this work, but that also means **dpacc was not re-run**.
+Both builds were verified by copying the tree to a scratch directory on the target and building
+there, leaving each machine's own checkout untouched: `bf3-uwaterloo-1` for 3.4 (it was in use) and
+`bf3-uwashington-1` for 3.1. "All 4 targets" means `doca_flow_nop`, `doca_flow_ecn_pcap`,
+`doca_flow_template` and `doca_pcc_ecn_rp` — so dpacc ran on both, down each of its two paths.
+
+### The flooding capture path works
+
+Run end to end on `bf3-uwashington-1` (DOCA 3.1), every phase passing:
+
+```
+packets flowing     CE marked 396125 -> 225509091
+baseline throughput 184.41 Gb/s
+pcap ecn marking    15114/15114 captured IPv4 packets are CE-marked
+pcc controller      loaded on mlx5_1
+rate collapse       184.41 -> 0.08 Gb/s
+```
+
+That settles the open question from the port: **the hash-flooding pipe really does deliver a copy
+to the CPU queue**, and the copy is taken *after* the CE action, exactly as the 2.x shared mirror
+did — 15114 of 15114 captured packets are CE-marked at `--percent 100`, with zero `not_ect`,
+`ect0`, `ect1` or truncated. `flooded:` moves. The mirror→flood substitution is no longer
+theoretical.
+
+Note the baseline: **184.41 Gb/s**, where `doca-2` on `bf3-ulisbon-1` measures 92.60. That is the
+testbed, not the port — a different link configuration on the uwashington boxes. Do not read the
+two numbers against each other; compare each machine to its own no-app control.
+
+This exercises the compat header's *shim* path (`doca_flow_pipe_add_entry`, pre-3.2 flags) and the
+pre-3.2 dpacc path. The flooding code itself is identical on both releases, so 3.4 still needs a
+run to prove the native `basic_add_entry` path and the blob-based DPA build — but nothing
+version-specific about the capture design remains untested.
 
 To reproduce, or to build the whole tree once the machine is free:
 
 ```bash
 export PKG_CONFIG_PATH=/opt/mellanox/doca/lib/aarch64-linux-gnu/pkgconfig:/opt/mellanox/dpdk/lib/aarch64-linux-gnu/pkgconfig
-cd doca-3.4 && meson setup build && ninja -C build
+cd doca-3 && meson setup build && ninja -C build
 ```
 
 That `PKG_CONFIG_PATH` is required on a native (non-container) build: `doca-common`, `doca-argp` and
@@ -326,17 +401,17 @@ Re-run after any further change with:
 ./admin/fleet.py test-tutorial bf3-ulisbon-1
 ```
 
-### Still to do on `doca-3.4`
+### Still to do on `doca-3`
 
-Nothing in `doca-3.4` has been run since the port — only compiled. When `bf3-uwaterloo-1` is free:
-
-- Run the solution end to end and fill in the table
-  (`./admin/fleet.py test-tutorial bf3-uwaterloo-1`).
-- Confirm the flooding pipe actually captures. The counter line reads `flooded:` where 2.x read
-  `mirrored:`, and it has never been observed to move — the whole mirror→flood substitution is
-  unverified on hardware.
-- Re-check `doca_flow_nop`, which changed most in the port (see the `--sf-num` note above).
-- Build `doca-pcc-ecn` too, so dpacc runs; the compile-only check above skipped it.
+- Run it end to end on 3.4 once `bf3-uwaterloo-1` is free
+  (`./admin/fleet.py test-tutorial bf3-uwaterloo-1`). The 3.1 pass does not cover the native
+  `doca_flow_pipe_basic_add_entry` path or the blob-based dpacc build; those are the only two
+  things 3.4 does differently.
+- Run `doca_flow_nop` by hand on either release. `test-tutorial` never launches it, so the file
+  that changed most in the port is still the one with the least runtime coverage — in particular
+  its `--sf-num` handling and the `open_sf_representor` SF-index match.
+- Run the template by hand and confirm it still blackholes traffic by design (the `doca-2`
+  behaviour below), so participants see the same thing on a 3.x box.
 
 ### The template blackholes traffic, by design
 

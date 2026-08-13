@@ -12,8 +12,8 @@
 # version installed on the tutorial DPU (`ls /opt/mellanox/doca`, or `dpkg -l | grep doca-devel`
 # → 2.9.1008). Keeping the container and the DPU on the same DOCA release matters: the
 # doca-flow sources here use the 2.9 Flow API, and the DPA algo built for Part IV is loaded
-# by the host's firmware/driver stack. The doca-3.2 / doca-3.4 branches carry the same setup
-# ported to those newer releases.
+# by the host's firmware/driver stack. The doca-3 tree carries the same setup ported to the
+# DOCA 3.x releases.
 #
 #   docker build -t sigcomm26-tutorial .
 #

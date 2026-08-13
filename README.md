@@ -659,8 +659,8 @@ the [`Dockerfile`](Dockerfile) and drops you into a shell inside it:
 
 The base is `nvcr.io/nvidia/doca/doca:2.9.1-devel` — the same DOCA release as the DPU
 (`2.9.1008`), which matters because the `doca-flow` sources here target the 2.9 Flow API and the
-Part IV DPA algo is loaded by the host's driver/firmware stack. (The `doca-3.2` and `doca-3.4`
-branches carry this same setup ported to those newer releases.)
+Part IV DPA algo is loaded by the host's driver/firmware stack. (The `doca-3`
+tree carries this same setup ported to the DOCA 3.x releases.)
 
 What you get:
 

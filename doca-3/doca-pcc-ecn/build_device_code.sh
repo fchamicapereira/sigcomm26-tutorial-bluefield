@@ -5,15 +5,22 @@
 # run by hand, though it is a plain script if you need to debug the dpacc invocation.
 #
 # This mirrors DOCA 3.4's own applications/pcc/build_device_code.sh, reduced to the single
-# reaction-point application this tutorial builds. Two steps in it are specific to DOCA 3.x and
-# have no equivalent in the 2.x version of this script:
+# reaction-point application this tutorial builds. Two steps in it are specific to the DOCA 3.2+
+# DPA toolchain and have no equivalent in the 2.x version of this script:
 #
 #   1. dpa-app-attributes2blob turns device/dpa_app_attributes.yaml into a blob that dpacc takes
-#      via --dpa-proc-attr; without it dpacc rejects the build.
+#      via --dpa-proc-attr; without it that dpacc rejects the build.
 #   2. dpacc's archive does NOT contain the host-side stubs. They are emitted as C into --keep-dir
 #      and must be compiled and archived separately (the loop at the bottom) — and it is THAT
 #      archive, in the keep directory, that meson links, not dpacc's own .a.
 #
+# DOCA 3.1 has NEITHER: there is no dpa-app-attributes2blob in its tools directory, and its dpacc
+# has no --dpa-proc-attr flag at all. It behaves like the 2.x toolchain, emitting one archive that
+# already exports the app symbol. So this script picks its path from what is actually installed —
+# the same "check the filesystem, not a version string" rule the DPA-library choice below uses.
+#
+# Either way the archive meson links ends up at ${KEEP_DIR}/${APP_NAME}.a, so meson.build does not
+# have to know which toolchain produced it.
 set -e
 
 SRC_DIR=$1          # doca-pcc-ecn/device
@@ -55,6 +62,26 @@ else
 fi
 
 mkdir -p "${BUILD_DIR}" "${KEEP_DIR}"
+
+# The pre-3.2 toolchain: no attributes blob, no --dpa-proc-attr, and dpacc's own archive is
+# complete — it already exports `${APP_NAME}`, so the host-stub archiving below does not apply.
+# Copy it under KEEP_DIR so the linkable archive is in the same place on both paths.
+if [ ! -x "${ATTRIBUTES2BLOB}" ]; then
+	"${DPACC}" \
+		-flto \
+		${SRC_FILES} \
+		-o "${BUILD_DIR}/${APP_NAME}.a" \
+		-mcpu="${DPACC_MCPU}" \
+		-hostcc=gcc \
+		-hostcc-options="${HOST_CC_FLAGS}" \
+		--devicecc-options="${DEVICE_CC_FLAGS}, ${INC_LIST}" \
+		-disable-asm-checks \
+		-device-libs="-L${DOCA_LIB_DIR} -l${DOCA_PCC_DEV_LIB}" \
+		--app-name="${APP_NAME}"
+
+	cp -f "${BUILD_DIR}/${APP_NAME}.a" "${KEEP_DIR}/${APP_NAME}.a"
+	exit 0
+fi
 
 "${ATTRIBUTES2BLOB}" "${ATTRIBUTES_YAML}" "${ATTRIBUTES_BLOB}"
 

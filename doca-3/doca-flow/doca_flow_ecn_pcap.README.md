@@ -1,4 +1,4 @@
-# `doca_flow_ecn_pcap` — ECN-mark **and** capture-to-pcap in one PF0 program (DOCA 3.4)
+# `doca_flow_ecn_pcap` — ECN-mark **and** capture-to-pcap in one PF0 program (DOCA 3.x)
 
 A DOCA Flow program (PF0, switch mode) that CE-marks (`ECN=11`) a configurable fraction of the wire
 traffic *and* copies each packet to a CPU RSS queue where it's written to a `.pcap` — while the
@@ -9,8 +9,10 @@ Why combine them? Only **one** DOCA Flow / DPDK primary process can own PF0 (and
 side by side — the second fails with *"Cannot create lock … another primary process running"*. This
 program folds both roles into one eSwitch pipeline so you can mark **and** watch the same traffic.
 
-This is the DOCA 3.4 build of [`doca-2/doca-flow/doca_flow_ecn_pcap.c`](../../doca-2/doca-flow/doca_flow_ecn_pcap.c).
+This is the DOCA 3.x build of [`doca-2/doca-flow/doca_flow_ecn_pcap.c`](../../doca-2/doca-flow/doca_flow_ecn_pcap.c).
 It is the same program with the same structure; see [What differs from the 2.x build](#what-differs-from-the-2x-build).
+One source serves every DOCA 3.x release — verified on 3.1 and 3.4 — with the handful of API
+differences between the minors absorbed by [`doca_flow_compat.h`](doca_flow_compat.h).
 
 ---
 
@@ -44,7 +46,7 @@ It is the same program with the same structure; see [What differs from the 2.x b
 Part of the `doca-flow` meson build (links `libpcap`):
 
 ```bash
-cd doca-3.4 && meson setup build && ninja -C build   # produces build/doca-flow/doca_flow_ecn_pcap
+cd doca-3 && meson setup build && ninja -C build   # produces build/doca-flow/doca_flow_ecn_pcap
 ```
 
 Needs `libpcap-dev` (the [`Dockerfile`](../Dockerfile) installs it for the container build).
@@ -92,7 +94,7 @@ The program logs a per-second line:
 The two files are deliberately kept as close as possible; everything below is forced by the DOCA
 version, not by preference.
 
-| | `doca-2` | `doca-3.4` |
+| | `doca-2` | `doca-3` |
 |---|---|---|
 | copy to the pcap | shared mirror (`DOCA_FLOW_SHARED_RESOURCE_MIRROR`) attached via `monitor.shared_mirror_id` | `DOCA_FLOW_PIPE_HASH` pipe running `DOCA_FLOW_PIPE_HASH_MAP_ALGORITHM_FLOODING` |
 | SF representor | DPDK port index passed as a devargs string | `doca_dev_rep` opened via `doca_devinfo_rep_create_list` |
@@ -104,10 +106,17 @@ version, not by preference.
 | probe args | `dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf0` | `dv_flow_en=2,fdb_def_rule_en=1,representor=sf0` |
 | EAL allowlist | one dummy `-a pci:00:00.0` | also `-a auxiliary:`, or EAL probes the SFs now living in ns0/ns1 |
 
-**The mirror is gone.** DOCA Flow 3.2 removed `DOCA_FLOW_SHARED_RESOURCE_MIRROR`,
+**The mirror is gone from 3.2 onwards.** DOCA Flow 3.2 removed `DOCA_FLOW_SHARED_RESOURCE_MIRROR`,
 `struct doca_flow_resource_mirror_cfg` and `doca_flow_mirror_target`; by 3.4 no DOCA header mentions
 "mirror" and `libdoca_flow.so` exports no mirror symbol. The documented replacement is a flooding
-hash pipe, which delivers the packet to **every** entry in the pipe. Two constraints shape it:
+hash pipe, which delivers the packet to **every** entry in the pipe.
+
+DOCA 3.1 is the exception: it still has the shared mirror *and* the flooding pipe. This tree uses
+flooding there anyway, so one set of sources serves every 3.x release — and the flooding path is the
+one that has to keep working on 3.2+, so it is the one worth exercising. If you are reading this on
+a 3.1 box and wondering why the mirror is not used: it would work, and it is a dead end.
+
+Two constraints shape the flooding pipe:
 
 - packet order is only guaranteed for the destination of the **first** entry, so entry 0 carries the
   production path (to the SF) and the pcap copy is entry 1;
@@ -122,7 +131,7 @@ creates `PASSTHROUGH` first here, where the 2.x build creates it after the captu
 
 - **Uses plain `"switch,hws"` mode.** The 2.x build additionally passes
   `"isolated,disable_switch_rss"` (and calls `rte_flow_isolate`) to stop DOCA Flow building an
-  internal FDB RSS suffix context that BlueField firmware rejects at port start; on 3.4 that is not
+  internal FDB RSS suffix context that BlueField firmware rejects at port start; on 3.x that is not
   needed, and the capture path needs RSS in the FDB domain.
 - **`--sample` is done in software** (write every Nth captured packet), keeping the mark ratio exact
   and independent of the capture ratio — `parser_meta.random` is already used by `--percent`.

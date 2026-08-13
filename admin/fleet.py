@@ -603,7 +603,7 @@ def cmd_test_tutorial(args: argparse.Namespace) -> int:
         print("\nno tutorial version for:")
         for host, doca in unsupported:
             print(f"  {host} (DOCA {doca}) — nothing was changed there")
-        print("  the mapping lives in local_scripts/test_tutorial.sh; doca-2/ covers every 2.x, " "3.x minors get their own directory")
+        print("  the mapping lives in local_scripts/test_tutorial.sh; doca-2/ covers every 2.x, " "doca-3/ every 3.x")
 
     # Somebody else's experiment was running there. These are shared lab machines, and the test
     # would have deleted their OVS bridges and SFs to make room for its own.

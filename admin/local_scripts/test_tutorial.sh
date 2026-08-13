@@ -276,15 +276,16 @@ SCRIPTS="$REPO/admin/local_scripts"
 # matter what else is wrong with it, and "DOCA 3.1, unsupported" is a far more useful answer than
 # "your checkout is stale" or "meson is missing" on a box that could not run the tutorial anyway.
 #
-# The mapping is not mechanical: doca-2/ covers every DOCA 2.x via the compile-time switches in
-# doca_flow_compat.h, while the 3.x minors each get their own directory because the Flow API
-# changed under them. A release with no directory is a real answer — the fleet has machines on
-# DOCA 3.1, and nothing here targets 3.1.
+# The mapping is not mechanical: one directory covers a whole major via the compile-time switches
+# in doca_flow_compat.h. doca-2/ covers every DOCA 2.x, doca-3/ covers every DOCA 3.x.
+#
+# Verified on 3.1 (the compat header's shim path: doca_flow_pipe_add_entry and the pre-3.2 entry
+# flags) and on 3.4 (the native path). 3.2 and 3.3 take the native path too and are expected to
+# work, but no machine in the fleet runs either, so neither has ever been built.
 DOCA_VERSION=$("$SCRIPTS/print_doca_version.sh" 2>/dev/null) || die "could not determine the DOCA version (see print_doca_version.sh -v)"
 case "$DOCA_VERSION" in
 	2.*) VERSION_DIR=doca-2 ;;
-	3.2) VERSION_DIR=doca-3.2 ;;
-	3.4) VERSION_DIR=doca-3.4 ;;
+	3.*) VERSION_DIR=doca-3 ;;
 	*)   VERSION_DIR="" ;;
 esac
 emit doca "$DOCA_VERSION"
@@ -303,8 +304,8 @@ unsupported() {
 [ -n "$VERSION_DIR" ] || unsupported "DOCA ${DOCA_VERSION}: no doca-*/ directory targets this release"
 [ -d "$REPO/$VERSION_DIR" ] || unsupported "DOCA ${DOCA_VERSION} maps to ${VERSION_DIR}/, which is not in this checkout"
 
-# Check for the sources rather than hardcoding which directory is incomplete: doca-3.2/ has no
-# ecn_pcap today and should start passing the moment one lands there, with no edit here.
+# Check for the sources rather than hardcoding which directory is incomplete, so a version
+# directory that gains the exercise starts passing the moment it lands, with no edit here.
 [ -r "$REPO/$VERSION_DIR/doca-flow/doca_flow_ecn_pcap.c" ] ||
 	unsupported "${VERSION_DIR}/ has no doca-flow/doca_flow_ecn_pcap.c — the DOCA Flow exercise is not ported to DOCA ${DOCA_VERSION} yet"
 if [ "$SKIP_PCC" -eq 0 ]; then
