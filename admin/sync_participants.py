@@ -18,6 +18,7 @@ Layout it produces:
     doca-3/ doca-3-solutions/     ditto for the DOCA 3 tree
     guides/tailscale.pdf          the rendered guide only, no LaTeX
     scripts/                      run_server.sh, run_client.sh, benchmark.sh, check_ecn_bits...
+    .vscode/                      IntelliSense paths for the DOCA/DPDK headers on the card
     .clang-format
 
 In both the exercise and the solution directory the program is called doca_flow_ecn_pcap.c. The
@@ -50,10 +51,15 @@ VERSIONS = ["doca-2", "doca-3"]
 # Copied verbatim into scripts/, keeping the executable bit.
 SCRIPTS = ["run_server.sh", "run_client.sh", "benchmark.sh", "check_ecn_bits_from_pcap.sh"]
 
+# Participant-only files kept here as real files rather than generated inline, so they can be
+# reviewed and edited directly. Mapped to their destination in the participant repo.
+ASSETS = {"participants/c_cpp_properties.json": ".vscode/c_cpp_properties.json"}
+
 # Top-level directories this script owns. Anything else in the participant repo survives a run.
 MANAGED = [f"{v}{suffix}" for v in VERSIONS for suffix in ("", "-solutions")] + [
     "guides",
     "scripts",
+    ".vscode",
 ]
 MANAGED_FILES = [".clang-format"]
 
@@ -188,6 +194,8 @@ def main():
             dst.chmod(src.stat().st_mode)
     for name in MANAGED_FILES:
         copy(REPO / name, dest / name, changes, args.dry_run)
+    for src_rel, dst_rel in ASSETS.items():
+        copy(REPO / "admin" / src_rel, dest / dst_rel, changes, args.dry_run)
 
     for kind, path in changes:
         print(f"  {kind:6} {path.relative_to(dest)}")

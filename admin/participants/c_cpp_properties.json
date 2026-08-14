@@ -1,0 +1,47 @@
+// IntelliSense settings for the C/C++ extension, so "go to definition" reaches the DOCA and DPDK
+// headers instead of stopping at #include.
+//
+// These paths are on the BlueField, not on your laptop: open the card over Remote-SSH and this
+// resolves. Opening the repository locally will not, since /opt/mellanox only exists on the DPU.
+//
+// Nothing here affects the build -- meson gets its flags from pkg-config. If the two ever disagree,
+// pkg-config is right and this file is stale.
+{
+  "configurations": [
+    {
+      "name": "BlueField",
+      "compilerPath": "/usr/bin/gcc",
+      "intelliSenseMode": "linux-gcc-arm64",
+
+      // gnu17, not c17. meson sets no c_std, so gcc compiles these sources as gnu17, and that is
+      // what defines _DEFAULT_SOURCE and with it the BSD types (u_int, u_char) that pcap.h uses
+      // without declaring. Under strict c17 every one of those becomes a red squiggle in a file
+      // that builds perfectly.
+      "cStandard": "gnu17",
+
+      // DOCA guards its newer APIs behind the first; DPDK does the same with the second. Without
+      // them much of doca_flow.h is invisible and every call to it looks undeclared.
+      "defines": [
+        "DOCA_ALLOW_EXPERIMENTAL_API",
+        "ALLOW_EXPERIMENTAL_API"
+      ],
+
+      // DPDK headers expect this to have been included already -- the build passes it as
+      // `-include rte_config.h`, and without it rte_*.h parses into a wall of errors.
+      "forcedInclude": [
+        "/opt/mellanox/dpdk/include/aarch64-linux-gnu/dpdk/rte_config.h"
+      ],
+
+      // Taken from `pkg-config --cflags doca-flow doca-argp doca-dpdk-bridge libdpdk`, which
+      // returns the same set on DOCA 2.9, 3.1 and 3.4 -- so one configuration covers every card.
+      "includePath": [
+        "${workspaceFolder}/**",
+        "/opt/mellanox/doca/include",
+        "/opt/mellanox/dpdk/include/dpdk",
+        "/opt/mellanox/dpdk/include/aarch64-linux-gnu/dpdk",
+        "/usr/include/libnl3"
+      ]
+    }
+  ],
+  "version": 4
+}
