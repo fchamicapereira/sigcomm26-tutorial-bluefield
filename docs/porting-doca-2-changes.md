@@ -174,10 +174,16 @@ belonged above the `if`, not above the `}`.
 
 ### 4. The participant template
 
-`doca_flow_template.c` is `doca_flow_ecn_pcap.c` with five function bodies emptied:
-`create_to_cpu_pipe`, `bind_capture_mirror`, `create_forward_to_sf_pipe`, `create_sampling_pipe`,
-`create_root_pipe`. `create_passthrough_pipe` stays implemented as the worked example, and
+`doca_flow_template.c` is `doca_flow_ecn_pcap.c` with four function bodies emptied:
+`bind_capture_mirror`, `create_forward_to_sf_pipe`, `create_sampling_pipe`, `create_root_pipe`.
+`create_passthrough_pipe` and `create_to_cpu_pipe` stay implemented as the worked examples, and
 `build_pipeline` stays implemented so the topology is given.
+
+`create_to_cpu_pipe` is the one that can be given away for free: it takes only `port`, so it depends
+on nothing a participant has yet to write, and nothing reaches it until `bind_capture_mirror` aims
+the mirror at it. Handing over any of the other four instead would break the minute-zero invariant
+below — `create_root_pipe`, for instance, would install an entry forwarding to `wire_target`, which
+is `NULL` until `create_forward_to_sf_pipe` exists.
 
 Also added: a `flow_template` executable in `doca-flow/meson.build`, and
 `doca_flow_template.README.md` (draft guidance — superseded once a proper participant guide
@@ -188,13 +194,13 @@ exists, and no longer referenced from the code).
 These were each arrived at the hard way. Breaking any of them makes the template worse in a way
 that is not obvious until someone uses it.
 
-- **The template is byte-identical to the solution except the five bodies.** Same file header, same
+- **The template is byte-identical to the solution except the four bodies.** Same file header, same
   `DOCA_LOG_REGISTER` tag, same `doca_argp_init` program name. Consequence: `--help` and the log
   lines read `doca_flow_ecn_pcap` in both binaries. That is deliberate — it keeps
   `diff doca_flow_template.c doca_flow_ecn_pcap.c` down to the participant's own work.
 - **No comment ever differs.** Guidance goes in the guide, not in the source, or the diff fills up
   with comment churn instead of code.
-- **`build_pipeline` stays implemented.** With it present and the five stubs returning `NULL`,
+- **`build_pipeline` stays implemented.** With it present and the four stubs returning `NULL`,
   there are no DOCA calls to fail: the unmodified template *compiles and runs*, reporting
   `CE marked: 0` and forwarding nothing. Participants get a working program at minute zero and fill
   in one pipe at a time. Empty the assembly too and it dies during setup instead.
@@ -215,12 +221,11 @@ cp doca_flow_ecn_pcap.c doca_flow_template.c && python3 - <<'PY'
 import pathlib
 p = pathlib.Path("doca_flow_template.c")
 lines = p.read_text().split("\n")
-for name, n, ret in [("create_to_cpu_pipe", 1, "  return NULL;"),
-                     ("bind_capture_mirror", 2, "  return;"),
-                     ("create_forward_to_sf_pipe", 3, "  return NULL;"),
-                     ("create_sampling_pipe", 4, "  return NULL;"),
-                     ("create_root_pipe", 5, "  return;")]:
-    body = ["  /* TODO %d -- your code here. */" % n, ret]
+for name, n, ret in [("bind_capture_mirror", 1, "  return;"),
+                     ("create_forward_to_sf_pipe", 2, "  return NULL;"),
+                     ("create_sampling_pipe", 3, "  return NULL;"),
+                     ("create_root_pipe", 4, "  return;")]:
+    body = ["  // TODO %d -- your code here." % n, ret]
     start = next(i for i, l in enumerate(lines) if l.startswith("static") and (name + "(") in l)
     o = start
     while not lines[o].rstrip().endswith("{"):
@@ -232,23 +237,22 @@ for name, n, ret in [("create_to_cpu_pipe", 1, "  return NULL;"),
 p.write_text("\n".join(lines))
 PY
 clang-format -i doca_flow_template.c
-diff -u doca_flow_ecn_pcap.c doca_flow_template.c   # expect only the five bodies
+diff -u doca_flow_ecn_pcap.c doca_flow_template.c   # expect only the four bodies
 ```
 
 For `doca-3` the capture path is a **hash-flooding pipe**, not a shared mirror, so the function
-list differs — `create_flood_pipe` replaces `bind_capture_mirror` as TODO 2, and there is no
+list differs — `create_flood_pipe` replaces `bind_capture_mirror` as TODO 1, and there is no
 `MIRROR_ID` binding to write. The exercise is otherwise the same shape, and the substitution in the
 recipe above is the only change needed:
 
 ```python
-for name, n, ret in [("create_to_cpu_pipe", 1, "  return NULL;"),
-                     ("create_flood_pipe", 2, "  return NULL;"),      # was bind_capture_mirror
-                     ("create_forward_to_sf_pipe", 3, "  return NULL;"),
-                     ("create_sampling_pipe", 4, "  return NULL;"),
-                     ("create_root_pipe", 5, "  return;")]:
+for name, n, ret in [("create_flood_pipe", 1, "  return NULL;"),      # was bind_capture_mirror
+                     ("create_forward_to_sf_pipe", 2, "  return NULL;"),
+                     ("create_sampling_pipe", 3, "  return NULL;"),
+                     ("create_root_pipe", 4, "  return;")]:
 ```
 
-Note TODO 2 returns `NULL` here rather than being `void`, so `doca-3` has one `void` stub where
+Note TODO 1 returns `NULL` here rather than being `void`, so `doca-3` has one `void` stub where
 `doca-2` has two. The "two lines per body" invariant still holds either way.
 
 One gotcha seen while reformatting: clang-format never re-joins adjacent string literals, so if the

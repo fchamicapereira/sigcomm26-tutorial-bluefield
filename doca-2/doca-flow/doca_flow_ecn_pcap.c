@@ -26,6 +26,31 @@ DOCA_LOG_REGISTER(FLOW_ECN_PCAP);
 #define SNAPLEN 262144
 #define RANDOM_FIELD_WIDTH 16
 
+// The two DPDK ports this program forwards between, and why they hold these values.
+//
+// DPDK numbers ethdevs in the order they are probed, and open_and_probe_dev() probes exactly two:
+// doca_dpdk_port_probe() brings up the PF uplink itself, and its devargs ask for one representor
+// ("representor=sf0"), the receiver SF's. The PF is therefore always 0 and that representor always
+// 1 — it is the probe string that decides this, not anything about the hardware, so changing the
+// devargs is what would change these ids.
+//
+// Both directions of the eSwitch need one of them as a forwarding target: wire traffic is sent on
+// to the SF, and what comes back from the SF is sent out of the uplink. find_pf_port_id() derives
+// the PF's id independently at startup, by finding the one ethdev that is not a representor, so a
+// mismatch there would surface rather than corrupt the pipeline silently.
+#define PF_PORT_ID 0
+#define SF_REP_PORT_ID 1
+
+// The queue every entry in this program is installed on. DOCA lets rules be added from several
+// threads at once, each on its own queue; this program installs all of its entries once, at
+// startup, from the main thread, so there is only ever queue 0.
+#define PIPE_QUEUE 0
+
+// How long doca_flow_entries_process() may wait, in microseconds, for the hardware to confirm the
+// entries handed to it. Installation is asynchronous — doca_flow_pipe_add_entry() returns as soon
+// as the driver has taken the rule, and the verdict arrives later through entry_process_cb().
+#define ENTRY_PROCESS_TIMEOUT_US 10000
+
 // Descriptor ring sizes. RX is the capture path — every mirrored copy lands there and waits for
 // the main loop to drain it — so it is deeper than TX, which this program never really uses.
 #define RX_RING_SIZE 1024
@@ -145,6 +170,11 @@ static __attribute__((format(printf, 2, 3))) void doca_check(doca_error_t err, c
   exit(EXIT_FAILURE);
 }
 
+// Run a DOCA call and abort if it fails. `ctx` names the pipe or the setup phase the call belongs
+// to; the call's own source text supplies the rest, so the message points at the exact call that
+// failed without a hand-written label to keep in step with it.
+#define DOCA_CHECK(ctx, expr) doca_check((expr), "%s: %s", (ctx), #expr)
+
 // percent -> nearest power-of-two random mask (same technique as doca_flow_ecn).
 static uint16_t get_random_mask(double percentage) {
   double next = 50.0;
@@ -221,32 +251,28 @@ static doca_error_t initialize_dpdk(int argc, char **argv) {
 //                      does with parser_meta.port_meta. The driver puts the port into isolated
 //                      mode as a result: "ingress traffic is restricted to defined flow rules".
 //   representor=sf0    Also probe the receiver SF's representor, so it shows up as a second DPDK
-//                      port. The PF is port 0, this becomes port 1 — the ".port_id = 1" the
-//                      capture pipes forward to.
+//                      port. This is the line that gives PF_PORT_ID and SF_REP_PORT_ID their
+//                      values: the PF is probed first and the representor second.
 static struct doca_dev *open_and_probe_dev(uint32_t index) {
   struct doca_devinfo **list;
   uint32_t n;
   struct doca_dev *dev;
-  doca_error_t err;
-  err = doca_devinfo_create_list(&list, &n);
-  doca_check(err, "doca_devinfo_create_list");
+  DOCA_CHECK("device", doca_devinfo_create_list(&list, &n));
   if (index >= n) {
     DOCA_LOG_CRIT("Device index %u out of range (%u)", index, n);
     exit(EXIT_FAILURE);
   }
-  err = doca_dev_open(list[index], &dev);
-  doca_check(err, "doca_dev_open");
+  DOCA_CHECK("device", doca_dev_open(list[index], &dev));
   doca_devinfo_destroy_list(list);
-  err = doca_dpdk_port_probe(dev,
-                             "dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf0");
-  doca_check(err, "doca_dpdk_port_probe");
+  DOCA_CHECK("device",
+             doca_dpdk_port_probe(
+                 dev, "dv_flow_en=2,fdb_def_rule_en=1,repr_matching_en=0,representor=sf0"));
   return dev;
 }
 
 static void configure_and_start_dpdk_port(struct doca_dev *dev) {
   uint16_t first;
-  doca_error_t err = doca_dpdk_get_first_port_id(dev, &first);
-  doca_check(err, "doca_dpdk_get_first_port_id");
+  DOCA_CHECK("dpdk port", doca_dpdk_get_first_port_id(dev, &first));
   // Size the mbufs for the largest frame that can arrive, not for the DPDK ports' MTU.
   //
   // The captured copies are the frames flowing between the SFs, and an SF may be configured with
@@ -304,10 +330,8 @@ static void configure_and_start_dpdk_port(struct doca_dev *dev) {
 
 static void initialize_doca_flow(void) {
   struct doca_flow_cfg *cfg;
-  doca_error_t err = doca_flow_cfg_create(&cfg);
-  doca_check(err, "doca_flow_cfg_create");
-  err = doca_flow_cfg_set_pipe_queues(cfg, NB_QUEUES);
-  doca_check(err, "set_pipe_queues");
+  DOCA_CHECK("doca_flow init", doca_flow_cfg_create(&cfg));
+  DOCA_CHECK("doca_flow init", doca_flow_cfg_set_pipe_queues(cfg, NB_QUEUES));
   // Mode args, one comma-separated token at a time:
   //
   //   switch              Program the eSwitch (FDB) rather than a plain NIC ingress domain, so
@@ -331,16 +355,13 @@ static void initialize_doca_flow(void) {
   //
   // The last two are undocumented in doca_flow.h but are real parsed tokens — they appear in
   // libdoca_flow.so alongside "expert" and "hairpinq_num".
-  err = doca_flow_cfg_set_mode_args(cfg, "switch,hws,isolated,disable_switch_rss");
-  doca_check(err, "set_mode_args");
-  err = doca_flow_cfg_set_nr_counters(cfg, 4);
-  doca_check(err, "set_nr_counters");
-  err = doca_flow_cfg_set_nr_shared_resource(cfg, MIRROR_ID + 1, DOCA_FLOW_SHARED_RESOURCE_MIRROR);
-  doca_check(err, "set_nr_shared_resource (mirror)");
-  err = doca_flow_cfg_set_cb_entry_process(cfg, entry_process_cb);
-  doca_check(err, "set_cb_entry_process");
-  err = doca_flow_init(cfg);
-  doca_check(err, "doca_flow_init");
+  DOCA_CHECK("doca_flow init",
+             doca_flow_cfg_set_mode_args(cfg, "switch,hws,isolated,disable_switch_rss"));
+  DOCA_CHECK("doca_flow init", doca_flow_cfg_set_nr_counters(cfg, 4));
+  DOCA_CHECK("doca_flow init", doca_flow_cfg_set_nr_shared_resource(
+                                   cfg, MIRROR_ID + 1, DOCA_FLOW_SHARED_RESOURCE_MIRROR));
+  DOCA_CHECK("doca_flow init", doca_flow_cfg_set_cb_entry_process(cfg, entry_process_cb));
+  DOCA_CHECK("doca_flow init", doca_flow_init(cfg));
   doca_flow_cfg_destroy(cfg);
 }
 
@@ -369,19 +390,14 @@ static uint16_t find_pf_port_id(void) {
 
 static struct doca_flow_port *port_start(struct doca_dev *dev) {
   uint16_t pid = find_pf_port_id();
-  doca_error_t err;
   struct doca_flow_port_cfg *cfg;
-  err = doca_flow_port_cfg_create(&cfg);
-  doca_check(err, "port_cfg_create");
-  err = doca_flow_port_cfg_set_dev(cfg, dev);
-  doca_check(err, "port_cfg_set_dev");
+  DOCA_CHECK("pf port", doca_flow_port_cfg_create(&cfg));
+  DOCA_CHECK("pf port", doca_flow_port_cfg_set_dev(cfg, dev));
   char s[8];
   snprintf(s, sizeof(s), "%u", pid);
-  err = doca_flow_port_cfg_set_devargs(cfg, s);
-  doca_check(err, "port_cfg_set_devargs");
+  DOCA_CHECK("pf port", doca_flow_port_cfg_set_devargs(cfg, s));
   struct doca_flow_port *port;
-  err = doca_flow_port_start(cfg, &port);
-  doca_check(err, "port_start");
+  DOCA_CHECK("pf port", doca_flow_port_start(cfg, &port));
   doca_flow_port_cfg_destroy(cfg);
   return port;
 }
@@ -390,13 +406,10 @@ static struct doca_flow_port *rep_port_start(uint16_t pid) {
   struct doca_flow_port_cfg *cfg;
   char s[8];
   snprintf(s, sizeof(s), "%u", pid);
-  doca_error_t err = doca_flow_port_cfg_create(&cfg);
-  doca_check(err, "rep port_cfg_create");
-  err = doca_flow_port_cfg_set_devargs(cfg, s);
-  doca_check(err, "rep set_devargs");
+  DOCA_CHECK("rep port", doca_flow_port_cfg_create(&cfg));
+  DOCA_CHECK("rep port", doca_flow_port_cfg_set_devargs(cfg, s));
   struct doca_flow_port *port;
-  err = doca_flow_port_start(cfg, &port);
-  doca_check(err, "rep port_start");
+  DOCA_CHECK("rep port", doca_flow_port_start(cfg, &port));
   doca_flow_port_cfg_destroy(cfg);
   return port;
 }
@@ -434,18 +447,14 @@ static doca_error_t sample_cb(void *p, void *c) {
 }
 static void register_params(void) {
   struct doca_argp_param *p;
-  doca_error_t err;
-  err = doca_argp_param_create(&p);
-  doca_check(err, "param pcap");
+  DOCA_CHECK("argp", doca_argp_param_create(&p));
   doca_argp_param_set_long_name(p, "pcap");
   doca_argp_param_set_description(
       p, "Output pcap file. Omit to run in pure ECN-mark mode (no capture, full goodput).");
   doca_argp_param_set_callback(p, pcap_cb);
   doca_argp_param_set_type(p, DOCA_ARGP_TYPE_STRING);
-  err = doca_argp_register_param(p);
-  doca_check(err, "register pcap");
-  err = doca_argp_param_create(&p);
-  doca_check(err, "param percent");
+  DOCA_CHECK("argp", doca_argp_register_param(p));
+  DOCA_CHECK("argp", doca_argp_param_create(&p));
   doca_argp_param_set_long_name(p, "percent");
   doca_argp_param_set_description(
       p,
@@ -453,37 +462,29 @@ static void register_params(void) {
       "default 100). All packets are captured regardless.");
   doca_argp_param_set_callback(p, percent_cb);
   doca_argp_param_set_type(p, DOCA_ARGP_TYPE_STRING);
-  err = doca_argp_register_param(p);
-  doca_check(err, "register percent");
-  err = doca_argp_param_create(&p);
-  doca_check(err, "param sample");
+  DOCA_CHECK("argp", doca_argp_register_param(p));
+  DOCA_CHECK("argp", doca_argp_param_create(&p));
   doca_argp_param_set_long_name(p, "sample");
   doca_argp_param_set_description(p,
                                   "Write only ~1-in-N captured packets to the pcap (default 1 = "
                                   "every packet). Marking/forwarding are unaffected.");
   doca_argp_param_set_callback(p, sample_cb);
   doca_argp_param_set_type(p, DOCA_ARGP_TYPE_STRING);
-  err = doca_argp_register_param(p);
-  doca_check(err, "register sample");
+  DOCA_CHECK("argp", doca_argp_register_param(p));
 }
 
 static void setup_logging(void) {
-  doca_error_t err = doca_log_backend_create_standard();
-  doca_check(err, "log_backend");
+  DOCA_CHECK("logging", doca_log_backend_create_standard());
   struct doca_log_backend *sdk;
-  err = doca_log_backend_create_with_file_sdk(stderr, &sdk);
-  doca_check(err, "sdk log");
-  err = doca_log_backend_set_sdk_level(sdk, DOCA_LOG_LEVEL_WARNING);
-  doca_check(err, "sdk level");
+  DOCA_CHECK("logging", doca_log_backend_create_with_file_sdk(stderr, &sdk));
+  DOCA_CHECK("logging", doca_log_backend_set_sdk_level(sdk, DOCA_LOG_LEVEL_WARNING));
 }
 
 static void parse_args(int argc, char **argv, struct app_config *cfg) {
-  doca_error_t err = doca_argp_init("doca_flow_ecn_pcap", cfg);
-  doca_check(err, "argp_init");
+  DOCA_CHECK("argp", doca_argp_init("doca_flow_ecn_pcap", cfg));
   doca_argp_set_dpdk_program(initialize_dpdk);
   register_params();
-  err = doca_argp_start(argc, argv);
-  doca_check(err, "argp_start");
+  DOCA_CHECK("argp", doca_argp_start(argc, argv));
 }
 
 // No --pcap means pure ECN-mark mode, so there is nothing to open. Mirrors close_capture_pcap,
@@ -609,7 +610,7 @@ static void run_capture_loop(uint16_t pf0, const struct app_config *cfg, const s
 // down to build_pipeline() is the eSwitch pipeline itself.
 // ================================================================================
 
-// PASSTHROUGH — the fallback forward, and the worked example for the exercise.
+// PASSTHROUGH — the fallback forward, and one of the two worked examples for the exercise.
 //
 // Matches IPv4 (the DSCP/ECN byte is declared but wildcarded) and forwards to port 1, the receiver
 // SF. No counter, no CE marking, no mirror: it moves the packet and does nothing else, which makes
@@ -618,39 +619,42 @@ static void run_capture_loop(uint16_t pf0, const struct app_config *cfg, const s
 // build_pipeline() hands it to both forwarding pipes as their miss target, so whatever they do not
 // match still reaches the receiver rather than being dropped.
 static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *port) {
-  struct doca_flow_match m = {0}, mm = {0};
-  struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_PORT, .port_id = 1};
   struct doca_flow_pipe_cfg *cfg;
+
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_create(&cfg, port));
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_set_name(cfg, "PASSTHROUGH"));
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT));
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_set_is_root(cfg, false));
+
+  const uint32_t nb_entries = 1;
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
+
+  struct doca_flow_match match = {0}, match_mask = {0};
+  match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+  match.outer.ip4.dscp_ecn = 0xFF;
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
+
+  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_PORT, .port_id = SF_REP_PORT_ID};
   struct doca_flow_pipe *pipe;
-  struct doca_flow_pipe_entry *e;
-  struct entry_batch_status st = {0};
-  doca_error_t err;
-  m.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
-  m.outer.ip4.dscp_ecn = 0xFF;
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "pass cfg");
-  err = doca_flow_pipe_cfg_set_name(cfg, "PASSTHROUGH");
-  doca_check(err, "pass name");
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "pass type");
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "pass dom");
-  err = doca_flow_pipe_cfg_set_is_root(cfg, false);
-  doca_check(err, "pass root");
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 1);
-  doca_check(err, "pass nr");
-  err = doca_flow_pipe_cfg_set_match(cfg, &m, &mm);
-  doca_check(err, "pass match");
-  err = doca_flow_pipe_create(cfg, &fwd, NULL, &pipe);
-  doca_check(err, "pass create");
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_create(cfg, &fwd_hit, NULL, &pipe));
+
   doca_flow_pipe_cfg_destroy(cfg);
-  m.outer.ip4.dscp_ecn = 0x00;
-  err = doca_flow_pipe_add_entry(0, pipe, &m, NULL, NULL, NULL, 0, &st, &e);
-  doca_check(err, "pass entry");
-  err = doca_flow_entries_process(port, 0, 10000, 1);
-  doca_check(err, "pass process");
-  doca_check((st.failure || st.nb_processed != 1) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-             "pass install");
+
+  // `match` is reused as this entry's values, so drop the template's 0xFF placeholder.
+  match.outer.ip4.dscp_ecn = 0x00;
+
+  struct entry_batch_status install_status = {0};
+  struct doca_flow_pipe_entry *entry;
+  DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match, NULL, NULL, NULL,
+                                                     DOCA_FLOW_NO_WAIT, &install_status, &entry));
+
+  DOCA_CHECK("PASSTHROUGH",
+             doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries));
+  doca_check((install_status.failure || install_status.nb_processed != nb_entries)
+                 ? DOCA_ERROR_BAD_STATE
+                 : DOCA_SUCCESS,
+             "PASSTHROUGH: install");
   return pipe;
 }
 
@@ -664,42 +668,43 @@ static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *por
 // No pipe forwards here. This one is reached only through the shared mirror that
 // bind_capture_mirror() aims at it, which is also why it is not a root pipe.
 static struct doca_flow_pipe *create_to_cpu_pipe(struct doca_flow_port *port) {
-  static uint16_t rssq[1] = {0};
-  struct doca_flow_match match = {0};
-  struct doca_flow_fwd fwd = {0};
   struct doca_flow_pipe_cfg *cfg;
-  struct doca_flow_pipe *pipe;
-  struct doca_flow_pipe_entry *e;
-  struct entry_batch_status st = {0};
-  doca_error_t err;
+
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_cfg_create(&cfg, port));
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_cfg_set_name(cfg, "TO_CPU"));
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT));
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_cfg_set_is_root(cfg, false));
+
+  const uint32_t nb_entries = 1;
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
+
+  struct doca_flow_match match = {0};
   match.parser_meta.outer_l3_type = DOCA_FLOW_L3_META_IPV4;
-  fwd.type = DOCA_FLOW_FWD_RSS;
-  fwd.rss_queues = rssq;
-  fwd.num_of_queues = 1;
-  fwd.rss_outer_flags = DOCA_FLOW_RSS_IPV4 | DOCA_FLOW_RSS_UDP;
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "to_cpu cfg_create");
-  err = doca_flow_pipe_cfg_set_name(cfg, "TO_CPU");
-  doca_check(err, "to_cpu set_name");
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "to_cpu set_type");
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "to_cpu set_domain");
-  err = doca_flow_pipe_cfg_set_is_root(cfg, false);
-  doca_check(err, "to_cpu set_is_root");
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 1);
-  doca_check(err, "to_cpu set_nr_entries");
-  err = doca_flow_pipe_cfg_set_match(cfg, &match, NULL);
-  doca_check(err, "to_cpu set_match");
-  err = doca_flow_pipe_create(cfg, &fwd, NULL, &pipe);
-  doca_check(err, "to_cpu create");
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_cfg_set_match(cfg, &match, NULL));
+
+  static uint16_t rss_queues[1] = {0};
+  struct doca_flow_fwd fwd_hit = {0};
+  fwd_hit.type = DOCA_FLOW_FWD_RSS;
+  fwd_hit.rss_queues = rss_queues;
+  fwd_hit.num_of_queues = 1;
+  fwd_hit.rss_outer_flags = DOCA_FLOW_RSS_IPV4 | DOCA_FLOW_RSS_UDP;
+  struct doca_flow_pipe *pipe;
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_create(cfg, &fwd_hit, NULL, &pipe));
+
   doca_flow_pipe_cfg_destroy(cfg);
-  err = doca_flow_pipe_add_entry(0, pipe, &match, NULL, NULL, NULL, 0, &st, &e);
-  doca_check(err, "to_cpu add_entry");
-  err = doca_flow_entries_process(port, 0, 10000, 1);
-  doca_check(err, "to_cpu process");
-  doca_check((st.failure || st.nb_processed != 1) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-             "to_cpu install");
+
+  struct entry_batch_status install_status = {0};
+  struct doca_flow_pipe_entry *entry;
+  DOCA_CHECK("TO_CPU", doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match, NULL, NULL, NULL,
+                                                DOCA_FLOW_NO_WAIT, &install_status, &entry));
+
+  DOCA_CHECK("TO_CPU",
+             doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries));
+  doca_check((install_status.failure || install_status.nb_processed != nb_entries)
+                 ? DOCA_ERROR_BAD_STATE
+                 : DOCA_SUCCESS,
+             "TO_CPU: install");
   DOCA_LOG_INFO("TO_CPU pipe ready -> CPU queue 0");
   return pipe;
 }
@@ -715,25 +720,28 @@ static struct doca_flow_pipe *create_to_cpu_pipe(struct doca_flow_port *port) {
 // The two halves are easy to mix up: target.fwd decides where the COPY goes (into cpu_pipe, and so
 // to the pcap), while DOCA_TUT_MIRROR_SET_ORIG_FWD below decides where the ORIGINAL carries on.
 static void bind_capture_mirror(struct doca_flow_port *port, struct doca_flow_pipe *cpu_pipe) {
+  // Where the COPY goes: into the TO_CPU pipe, and from there to the pcap.
   struct doca_flow_mirror_target target = {0};
-  struct doca_flow_resource_mirror_cfg mc = {0};
-  struct doca_flow_shared_resource_cfg cfg = {0};
-  uint32_t ids[1] = {MIRROR_ID};
-  doca_error_t err;
   target.fwd.type = DOCA_FLOW_FWD_PIPE;
   target.fwd.next_pipe = cpu_pipe;
-  mc.nr_targets = 1;
-  mc.target = &target;
+
+  struct doca_flow_resource_mirror_cfg mirror_cfg = {0};
+  mirror_cfg.nr_targets = 1;
+  mirror_cfg.target = &target;
   // Where the ORIGINAL packet goes after a copy is mirrored. DOCA 2.7 requires this; 2.9 refuses
   // to bind the mirror if it is set. See doca_flow_compat.h for the measurements.
-  // 1 = the SF representor
-  DOCA_TUT_MIRROR_SET_ORIG_FWD(mc, 1);
+  DOCA_TUT_MIRROR_SET_ORIG_FWD(mirror_cfg, SF_REP_PORT_ID);
 
-  cfg.mirror_cfg = mc;
-  err = doca_flow_shared_resource_set_cfg(DOCA_FLOW_SHARED_RESOURCE_MIRROR, MIRROR_ID, &cfg);
-  doca_check(err, "mirror set_cfg");
-  err = doca_flow_shared_resources_bind(DOCA_FLOW_SHARED_RESOURCE_MIRROR, ids, 1, port);
-  doca_check(err, "mirror bind");
+  struct doca_flow_shared_resource_cfg shared_cfg = {0};
+  shared_cfg.mirror_cfg = mirror_cfg;
+  DOCA_CHECK("MIRROR", doca_flow_shared_resource_set_cfg(DOCA_FLOW_SHARED_RESOURCE_MIRROR,
+                                                         MIRROR_ID, &shared_cfg));
+
+  // Configuring the id is not enough on its own: binding is what attaches it to this port, and
+  // only then can a pipe on that port reference MIRROR_ID from its monitor.
+  uint32_t mirror_ids[1] = {MIRROR_ID};
+  DOCA_CHECK("MIRROR", doca_flow_shared_resources_bind(DOCA_FLOW_SHARED_RESOURCE_MIRROR, mirror_ids,
+                                                       1, port));
   DOCA_LOG_INFO("Shared mirror %u -> TO_CPU pipe -> queue 0", MIRROR_ID);
 }
 
@@ -752,71 +760,95 @@ static void bind_capture_mirror(struct doca_flow_port *port, struct doca_flow_pi
 // FOR — forwarding is — which is why the ECN part of the exercise is only the action.
 //
 // out_entry hands the installed entry back so the report can query its counter.
-static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *port,
-                                                        const char *name, bool mark, bool mirror,
+static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *port, bool mark,
+                                                        bool mirror,
                                                         struct doca_flow_pipe *miss_pipe,
                                                         struct doca_flow_pipe_entry **out_entry) {
-  struct doca_flow_match m = {0}, mm = {0};
-  struct doca_flow_actions act = {0}, *act_arr[1] = {&act};
-  struct doca_flow_monitor mon = {0};
-  struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_PORT, .port_id = 1};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = miss_pipe};
+  const char *name = mark ? "MARK_CAPTURE" : "PASS_CAPTURE";
   struct doca_flow_pipe_cfg *cfg;
-  struct doca_flow_pipe *pipe;
-  struct entry_batch_status st = {0};
-  doca_error_t err;
 
-  m.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
-  m.outer.ip4.dscp_ecn = 0xFF;
-  mm.outer.ip4.dscp_ecn = 0x00;
-  mon.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;
-  // mirror a copy to the pcap (0 == no mirror)
-  if (mirror) mon.shared_mirror_id = MIRROR_ID;
+  DOCA_CHECK(name, doca_flow_pipe_cfg_create(&cfg, port));
+  DOCA_CHECK(name, doca_flow_pipe_cfg_set_name(cfg, name));
+  DOCA_CHECK(name, doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+
+  // Default pipe domain for actions on the ingress traffic.
+  DOCA_CHECK(name, doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT));
+
+  // Not the root pipe (i.e. not the first pipe to see the packet). The root pipe is PORT_DEMUX,
+  // which is built in build_pipeline() and is the only pipe with is_root=true.
+  DOCA_CHECK(name, doca_flow_pipe_cfg_set_is_root(cfg, false));
+
+  // One entry: the match template. The actual entry is added below with doca_flow_pipe_add_entry().
+  const uint32_t nb_entries = 1;
+  DOCA_CHECK(name, doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
+
+  // A field set in the template but zeroed in the mask is declared without being compared, which is
+  // how dscp_ecn is treated here: MARK_CAPTURE has to catch packets that arrive already CE-marked
+  // as readily as fresh ones. l3_type has no mask entry, so it is compared exactly.
+  struct doca_flow_match match = {0}, match_mask = {0};
+  match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+  match.outer.ip4.dscp_ecn = 0xFF;
+  match_mask.outer.ip4.dscp_ecn = 0x00;
+  DOCA_CHECK(name, doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
+
   // 0xFF is the action template ("entries may write this field"); the per-entry value follows below
+  struct doca_flow_actions action_template = {0}, *action_templates[1] = {&action_template};
   if (mark) {
-    act.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
-    act.outer.ip4.dscp_ecn = 0xFF;
+    action_template.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+    action_template.outer.ip4.dscp_ecn = 0xFF;
+    DOCA_CHECK(name, doca_flow_pipe_cfg_set_actions(cfg, action_templates, NULL, NULL, 1));
   }
 
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "%s cfg", name);
-  err = doca_flow_pipe_cfg_set_name(cfg, name);
-  doca_check(err, "%s name", name);
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "%s type", name);
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "%s dom", name);
-  err = doca_flow_pipe_cfg_set_is_root(cfg, false);
-  doca_check(err, "%s root", name);
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 1);
-  doca_check(err, "%s nr", name);
-  err = doca_flow_pipe_cfg_set_match(cfg, &m, &mm);
-  doca_check(err, "%s match", name);
-  if (mark) {
-    err = doca_flow_pipe_cfg_set_actions(cfg, act_arr, NULL, NULL, 1);
-    doca_check(err, "%s actions", name);
-  }
-  err = doca_flow_pipe_cfg_set_monitor(cfg, &mon);
-  doca_check(err, "%s monitor", name);
-  err = doca_flow_pipe_create(cfg, &fwd, &fwd_miss, &pipe);
-  doca_check(err, "%s create", name);
+  // The counter is what query_pkts() reads for the once-a-second report; the mirror id, when
+  // capturing, is what sends a copy of every hit towards the pcap.
+  struct doca_flow_monitor monitor = {0};
+  monitor.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;
+  if (mirror) monitor.shared_mirror_id = MIRROR_ID;
+  DOCA_CHECK(name, doca_flow_pipe_cfg_set_monitor(cfg, &monitor));
+
+  // Finally create the pipe itself.
+  // We will later add the single entry to it, which is what actually makes it do anything.
+  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_PORT, .port_id = SF_REP_PORT_ID};
+  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = miss_pipe};
+  struct doca_flow_pipe *pipe;
+  DOCA_CHECK(name, doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
+
+  // pipe_create() has read the whole cfg and the pipe keeps no reference to it.
   doca_flow_pipe_cfg_destroy(cfg);
 
-  struct doca_flow_actions eact = {0};
+  // What the template above allowed to be written, written: 0x03 is both ECN bits set, CE
+  // ("Congestion Experienced"), the mark the PCC exercise in Part IV reacts to. action_idx picks
+  // which of the cfg's action templates this fills in — there is only one, at index 0.
+  struct doca_flow_actions entry_actions = {0};
   if (mark) {
-    eact.action_idx = 0;
-    eact.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
-    // CE
-    eact.outer.ip4.dscp_ecn = 0x03;
+    entry_actions.action_idx = 0;
+    entry_actions.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+    entry_actions.outer.ip4.dscp_ecn = 0x03;
   }
-  m.outer.ip4.dscp_ecn = 0x00;
-  err = doca_flow_pipe_add_entry(0, pipe, &m, mark ? &eact : NULL, &mon, NULL, 0, &st, out_entry);
-  doca_check(err, "%s add_entry", name);
-  err = doca_flow_entries_process(port, 0, 10000, 1);
-  doca_check(err, "%s process", name);
-  doca_check((st.failure || st.nb_processed != 1) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
+
+  // `match` is reused below as this entry's values, so drop the template's 0xFF placeholder.
+  match.outer.ip4.dscp_ecn = 0x00;
+
+  // The NULL is this entry's own forward: it has none, so it inherits the pipe's. install_status is
+  // an opaque context, handed straight back to entry_process_cb().
+  struct entry_batch_status install_status = {0};
+  DOCA_CHECK(name, doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match, mark ? &entry_actions : NULL,
+                                            &monitor, NULL, DOCA_FLOW_NO_WAIT, &install_status,
+                                            out_entry));
+
+  // add_entry() only queued the work; this drives it to completion.
+  DOCA_CHECK(name,
+             doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries));
+
+  // Success above means entries_process() ran, not that the hardware accepted anything — that
+  // verdict arrives through the callback. A pipe that exists but installed nothing forwards
+  // nothing, silently, which is the hardest failure here to spot from the outside.
+  doca_check((install_status.failure || install_status.nb_processed != nb_entries)
+                 ? DOCA_ERROR_BAD_STATE
+                 : DOCA_SUCCESS,
              "%s install", name);
   DOCA_LOG_INFO("%s pipe ready (%s + capture)", name, mark ? "CE-mark" : "no-mark");
+
   return pipe;
 }
 
@@ -832,39 +864,42 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
 static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
                                                    struct doca_flow_pipe *hit,
                                                    struct doca_flow_pipe *miss, uint16_t mask) {
-  struct doca_flow_match m = {0}, mm = {0};
-  struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = hit};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = miss};
   struct doca_flow_pipe_cfg *cfg;
+
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_create(&cfg, port));
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_name(cfg, "RANDOM_SAMPLE"));
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT));
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_is_root(cfg, false));
+
+  const uint32_t nb_entries = 1;
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
+
+  struct doca_flow_match match = {0}, match_mask = {0};
+  match.parser_meta.random = 0;
+  match_mask.parser_meta.random = mask;
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
+
+  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = hit};
+  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = miss};
   struct doca_flow_pipe *pipe;
-  struct doca_flow_pipe_entry *e;
-  struct entry_batch_status st = {0};
-  doca_error_t err;
-  m.parser_meta.random = 0;
-  mm.parser_meta.random = mask;
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "sample cfg");
-  err = doca_flow_pipe_cfg_set_name(cfg, "RANDOM_SAMPLE");
-  doca_check(err, "sample name");
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "sample type");
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "sample dom");
-  err = doca_flow_pipe_cfg_set_is_root(cfg, false);
-  doca_check(err, "sample root");
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 1);
-  doca_check(err, "sample nr");
-  err = doca_flow_pipe_cfg_set_match(cfg, &m, &mm);
-  doca_check(err, "sample match");
-  err = doca_flow_pipe_create(cfg, &fwd, &fwd_miss, &pipe);
-  doca_check(err, "sample create");
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
+
   doca_flow_pipe_cfg_destroy(cfg);
-  err = doca_flow_pipe_add_entry(0, pipe, &m, NULL, NULL, NULL, 0, &st, &e);
-  doca_check(err, "sample entry");
-  err = doca_flow_entries_process(port, 0, 10000, 1);
-  doca_check(err, "sample process");
-  doca_check((st.failure || st.nb_processed != 1) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-             "sample install");
+
+  // The entry adds nothing to the template: no actions, no counter, and no forward of its own, so
+  // both outcomes are decided by the pipe's own two forwards.
+  struct entry_batch_status install_status = {0};
+  struct doca_flow_pipe_entry *entry;
+  DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match, NULL, NULL, NULL,
+                                                       DOCA_FLOW_NO_WAIT, &install_status, &entry));
+
+  DOCA_CHECK("RANDOM_SAMPLE",
+             doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries));
+  doca_check((install_status.failure || install_status.nb_processed != nb_entries)
+                 ? DOCA_ERROR_BAD_STATE
+                 : DOCA_SUCCESS,
+             "RANDOM_SAMPLE: install");
   DOCA_LOG_INFO("Random-sample pipe ready: mask 0x%04x", mask);
   return pipe;
 }
@@ -886,51 +921,61 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
 // The pipe-level forward is FWD_CHANGEABLE, which is DOCA's way of saying "each entry brings its
 // own" — that is what lets the two directions go different places.
 static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe *wire_target) {
-  struct doca_flow_match m = {0}, mm = {0};
-  struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_CHANGEABLE};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_DROP};
   struct doca_flow_pipe_cfg *cfg;
+
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_create(&cfg, port));
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_name(cfg, "PORT_DEMUX"));
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT));
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_is_root(cfg, true));
+
+  // One entry per direction: in from the wire, and back from the receiver SF.
+  const uint32_t nb_entries = 2;
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
+
+  // A full mask on the ingress port: it is compared exactly, and each entry supplies the port it
+  // matches.
+  struct doca_flow_match match = {0}, match_mask = {0};
+  match.parser_meta.port_meta = UINT32_MAX;
+  match_mask.parser_meta.port_meta = UINT32_MAX;
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
+
+  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_CHANGEABLE};
+  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_DROP};
   struct doca_flow_pipe *pipe;
-  doca_error_t err;
-  m.parser_meta.port_meta = UINT32_MAX;
-  mm.parser_meta.port_meta = UINT32_MAX;
-  err = doca_flow_pipe_cfg_create(&cfg, port);
-  doca_check(err, "root cfg");
-  err = doca_flow_pipe_cfg_set_name(cfg, "PORT_DEMUX");
-  doca_check(err, "root name");
-  err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC);
-  doca_check(err, "root type");
-  err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
-  doca_check(err, "root dom");
-  err = doca_flow_pipe_cfg_set_is_root(cfg, true);
-  doca_check(err, "root root");
-  err = doca_flow_pipe_cfg_set_nr_entries(cfg, 2);
-  doca_check(err, "root nr");
-  err = doca_flow_pipe_cfg_set_match(cfg, &m, &mm);
-  doca_check(err, "root match");
-  err = doca_flow_pipe_create(cfg, &fwd, &fwd_miss, &pipe);
-  doca_check(err, "root create");
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
+
   doca_flow_pipe_cfg_destroy(cfg);
-  struct doca_flow_match em = {0};
-  struct doca_flow_fwd ef;
-  struct entry_batch_status st = {0};
-  struct doca_flow_pipe_entry *e;
-  em.parser_meta.port_meta = 0;
-  memset(&ef, 0, sizeof(ef));
-  ef.type = DOCA_FLOW_FWD_PIPE;
-  ef.next_pipe = wire_target;
-  err = doca_flow_pipe_add_entry(0, pipe, &em, NULL, NULL, &ef, DOCA_FLOW_WAIT_FOR_BATCH, &st, &e);
-  doca_check(err, "root wire");
-  em.parser_meta.port_meta = 1;
-  memset(&ef, 0, sizeof(ef));
-  ef.type = DOCA_FLOW_FWD_PORT;
-  ef.port_id = 0;
-  err = doca_flow_pipe_add_entry(0, pipe, &em, NULL, NULL, &ef, 0, &st, &e);
-  doca_check(err, "root sf");
-  err = doca_flow_entries_process(port, 0, 10000, 2);
-  doca_check(err, "root process");
-  doca_check((st.failure || st.nb_processed != 2) ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS,
-             "root install");
+
+  struct entry_batch_status install_status = {0};
+  struct doca_flow_pipe_entry *entry;
+  struct doca_flow_match entry_match = {0};
+  struct doca_flow_fwd entry_fwd = {0};
+
+  // From the wire: on to the head of the marking chain. WAIT_FOR_BATCH holds this entry back so it
+  // reaches the hardware together with the one below.
+  entry_match.parser_meta.port_meta = PF_PORT_ID;
+  entry_fwd.type = DOCA_FLOW_FWD_PIPE;
+  entry_fwd.next_pipe = wire_target;
+  DOCA_CHECK("PORT_DEMUX",
+             doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &entry_match, NULL, NULL, &entry_fwd,
+                                      DOCA_FLOW_WAIT_FOR_BATCH, &install_status, &entry));
+
+  // From the receiver SF: straight back out of the uplink, untouched.
+  entry_match.parser_meta.port_meta = SF_REP_PORT_ID;
+  memset(&entry_fwd, 0, sizeof(entry_fwd));
+  entry_fwd.type = DOCA_FLOW_FWD_PORT;
+  entry_fwd.port_id = PF_PORT_ID;
+  DOCA_CHECK("PORT_DEMUX",
+             doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &entry_match, NULL, NULL, &entry_fwd,
+                                      DOCA_FLOW_NO_WAIT, &install_status, &entry));
+
+  DOCA_CHECK("PORT_DEMUX",
+             doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries));
+  doca_check((install_status.failure || install_status.nb_processed != nb_entries)
+                 ? DOCA_ERROR_BAD_STATE
+                 : DOCA_SUCCESS,
+             "PORT_DEMUX: install");
   DOCA_LOG_INFO("Port demux ready");
 }
 
@@ -953,12 +998,11 @@ static void build_pipeline(struct doca_flow_port *port, const struct app_config 
   struct doca_flow_pipe *passthrough = create_passthrough_pipe(port);
 
   // PASS_CAPTURE (no mark) and MARK_CAPTURE (CE-mark); both mirror to pcap only when capturing.
-  struct doca_flow_pipe *pass_cap = create_forward_to_sf_pipe(port, "PASS_CAPTURE", false, capture,
-                                                              passthrough, &out->pass_entry);
+  struct doca_flow_pipe *pass_cap =
+      create_forward_to_sf_pipe(port, false, capture, passthrough, &out->pass_entry);
   struct doca_flow_pipe *mark_cap = NULL;
   if (cfg->random_percent > 0.0)
-    mark_cap =
-        create_forward_to_sf_pipe(port, "MARK_CAPTURE", true, capture, passthrough, &out->ce_entry);
+    mark_cap = create_forward_to_sf_pipe(port, true, capture, passthrough, &out->ce_entry);
 
   // wire-ingress entry point per --percent
   struct doca_flow_pipe *wire_target;
@@ -991,7 +1035,7 @@ int main(int argc, char **argv) {
   configure_and_start_dpdk_port(dev);
   initialize_doca_flow();
   struct doca_flow_port *port = port_start(dev);
-  struct doca_flow_port *sf_rep = rep_port_start(1);
+  struct doca_flow_port *sf_rep = rep_port_start(SF_REP_PORT_ID);
 
   build_pipeline(port, &cfg, &pl);
 
