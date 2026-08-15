@@ -85,6 +85,23 @@ bw_mean() {
 		$0 ~ /^[[:space:]]*[0-9]+([[:space:]]+[0-9.]+){4}[[:space:]]*$/ {v[++c]=$4}
 		END {if (!c) exit 1; s=c-n+1; if(s<1)s=1; for(i=s;i<=c;i++)t+=v[i]; printf "%.2f\n",t/(c-s+1)}' "$1"
 }
+ingress_bw_mean() { # ingress_bw_mean <log> <last-N samples>
+	awk -v n="$2" '
+		/ingress throughput: path0=/ {
+			p0 = p1 = ""
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^path0=[0-9.]+$/) {p0=$i; sub(/^path0=/,"",p0)}
+				if ($i ~ /^path1=[0-9.]+$/) {p1=$i; sub(/^path1=/,"",p1)}
+			}
+			if (p0 != "" && p1 != "") {a0[++c]=p0; a1[c]=p1}
+		}
+		END {
+			if (!c) exit 1
+			s=c-n+1; if(s<1)s=1
+			for(i=s;i<=c;i++){t0+=a0[i];t1+=a1[i]}
+			printf "%.3f %.3f\n",t0/(c-s+1),t1/(c-s+1)
+		}' "$1"
+}
 ce_counter_last() { # ce_counter_last <log> <0|1>
 	case "$2" in
 		0) sed -n 's/.*ingress newly CE-marked: path0=\([0-9]*\).*/\1/p' "$1" | tail -1 ;;
@@ -219,8 +236,11 @@ phase_mapping() {
 			# DOCA 2 mirrors every UDP/4791 packet because its public Flow API
 			# cannot match BTH QPN. Under load QP1 clones may be dropped, so its
 			# supported fallback learns sender QPN -> path from feedback source IP.
-			if grep -Eq 'ingress feedback grouping: .* -> path0' "$PCC_LOG" &&
-			   grep -Eq 'ingress feedback grouping: .* -> path1' "$PCC_LOG"; then
+			if grep -Eq 'RDMA-CM mapping: sender 0x[0-9a-fA-F]+ -> receiver unknown path0 \(DOCA 2 ingress-feedback inference\)' "$PCC_LOG" &&
+			   grep -Eq 'RDMA-CM mapping: sender 0x[0-9a-fA-F]+ -> receiver unknown path1 \(DOCA 2 ingress-feedback inference\)' "$PCC_LOG"; then
+				QPN_MAP=feedback
+			elif grep -Eq 'ingress feedback grouping: .* -> path0' "$PCC_LOG" &&
+			     grep -Eq 'ingress feedback grouping: .* -> path1' "$PCC_LOG"; then
 				QPN_MAP=feedback
 			elif grep -Eq 'PCC path-share diagnostic: path0 total=[1-9][0-9]* .*; path1 total=[1-9][0-9]* ' "$PCC_LOG"; then
 				# The diagnostic is authoritative steady-state evidence that both
@@ -253,14 +273,11 @@ phase_bandwidth() {
 	STEP_DETAIL="flow0=${BW_PATH0} Gb/s flow1=${BW_PATH1} Gb/s ratio=${FLOW_RATIO} total=${BW_TOTAL} Gb/s"
 }
 phase_path_distribution() {
-	local line
-	line=$(grep 'ingress throughput:' "$INGRESS_LOG" | tail -1 || true)
-	STEER_BW0=$(printf '%s\n' "$line" | sed -n 's/.*path0=\([0-9.]*\) Gbps path1=.*/\1/p')
-	STEER_BW1=$(printf '%s\n' "$line" | sed -n 's/.*path1=\([0-9.]*\) Gbps total=.*/\1/p')
-	[ -n "$STEER_BW0" ] && [ -n "$STEER_BW1" ] || { show_tail "$INGRESS_LOG"; STEP_DETAIL="missing ingress path-throughput counters"; return 1; }
+	read -r STEER_BW0 STEER_BW1 < <(ingress_bw_mean "$INGRESS_LOG" "$WINDOW") || { show_tail "$INGRESS_LOG"; STEP_DETAIL="missing ingress path-throughput counters"; return 1; }
 	PATH_RATIO=$(awk -v p0="$STEER_BW0" -v p1="$STEER_BW1" 'BEGIN{if(p1<=0)exit 1; printf "%.3f",p0/p1}') || { STEP_DETAIL="path1 ingress throughput is zero"; return 1; }
+	STEER_TOTAL=$(awk -v p0="$STEER_BW0" -v p1="$STEER_BW1" 'BEGIN{printf "%.3f",p0+p1}')
 	awk -v r="$PATH_RATIO" -v lo="$MIN_PATH_RATIO" -v hi="$MAX_PATH_RATIO" 'BEGIN{exit !(r>=lo && r<=hi)}' || { STEP_DETAIL="steering path0/path1=$PATH_RATIO, expected $MIN_PATH_RATIO..$MAX_PATH_RATIO"; return 1; }
-	STEP_DETAIL="path0=${STEER_BW0} Gb/s path1=${STEER_BW1} Gb/s ratio=${PATH_RATIO}"
+	STEP_DETAIL="path0=${STEER_BW0} Gb/s path1=${STEER_BW1} Gb/s total=${STEER_TOTAL} Gb/s ratio=${PATH_RATIO}"
 }
 phase_ecn_ratio() {
 	local p0a p1a p0b p1b d0 d1
@@ -302,7 +319,7 @@ run_phases() {
 	step "dynamic path share" phase_share || return 1
 }
 
-QPN_MAP=""; BW_PATH0=""; BW_PATH1=""; BW_TOTAL=""; FLOW_RATIO=""; STEER_BW0=""; STEER_BW1=""; PATH_RATIO=""; CE_PATH0=""; CE_PATH1=""; CE_RAW_RATIO=""; CE_RATIO=""; APPLIED_PATH0=""
+QPN_MAP=""; BW_PATH0=""; BW_PATH1=""; BW_TOTAL=""; FLOW_RATIO=""; STEER_BW0=""; STEER_BW1=""; STEER_TOTAL=""; PATH_RATIO=""; CE_PATH0=""; CE_PATH1=""; CE_RAW_RATIO=""; CE_RATIO=""; APPLIED_PATH0=""
 PHASES_OK=1; run_phases || PHASES_OK=0; cleanup || true
 log ""; log "== summary =="; FIRST_FAILURE=""
 for i in "${!STEP_NAMES[@]}"; do printf '   %-6s %-22s %s\n' "${STEP_STATES[$i]}" "${STEP_NAMES[$i]}" "${STEP_DETAILS[$i]}"; [ "${STEP_STATES[$i]}" = FAIL ] && [ -z "$FIRST_FAILURE" ] && FIRST_FAILURE="${STEP_NAMES[$i]}: ${STEP_DETAILS[$i]}"; done
