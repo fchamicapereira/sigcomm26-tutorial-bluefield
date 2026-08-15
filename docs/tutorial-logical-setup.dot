@@ -1,0 +1,58 @@
+/* The tutorial in one picture, with no BlueField vocabulary in it.
+ *
+ * Written for the guide's opening: what we are emulating, before any of PF / SF / representor /
+ * eSwitch has been introduced. The scenario is an ordinary RDMA transfer between two machines
+ * across a congested network — except that the "congested network" is one BlueField marking the
+ * packets itself, and both endpoints are processes on that same card's Arm cores.
+ *
+ * Deliberately NOT a data-path diagram: no vports, no pipe names, no namespaces. The detailed
+ * version is end-to-end-data-path.dot, and pf0-eswitch-pipes.dot zooms in further still. If you
+ * find yourself adding a function name to this file, it belongs in one of those two instead.
+ */
+digraph tutorial_logical_setup {
+  rankdir=LR;
+  fontname="Helvetica";
+  labelloc="t";
+  fontsize=16;
+  label="What the tutorial builds: a congestion signal, and something that reacts to it";
+  nodesep=0.6;
+  ranksep=0.9;
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
+  edge [fontname="Helvetica", fontsize=10];
+
+  subgraph cluster_arm_l {
+    label="Arm cores";
+    style="rounded";
+    color="#666666";
+    fontsize=12;
+    client [label="client\nib_write_bw\n(sends RDMA WRITEs)", fillcolor="#eeeeee"];
+  }
+
+  subgraph cluster_nic {
+    label="the same BlueField-3, in hardware";
+    style="rounded";
+    color="#444444";
+    fontsize=12;
+
+    flow [label="Part 1 — DOCA Flow\nyou program the NIC's switch to\nset ECN CE on a fraction\nof the packets going past",
+          fillcolor="#e6ddf5"];
+    pcc  [label="Part 2 — DOCA PCC\nyou program the DPA to cut the\nclient's send rate each time\na CNP comes back",
+          fillcolor="#d5f5d5"];
+  }
+
+  subgraph cluster_arm_r {
+    label="Arm cores";
+    style="rounded";
+    color="#666666";
+    fontsize=12;
+    server [label="server\nib_write_bw\n(receives)", fillcolor="#eeeeee"];
+  }
+
+  client -> flow   [label="  1. RDMA WRITEs, out one port\n  and back in the other  ",
+                    color="#1a6fbf", fontcolor="#1a6fbf"];
+  flow   -> server [label="  2. delivered, CE-marked  ", color="#1a6fbf", fontcolor="#1a6fbf"];
+  server -> pcc    [label="  3. the receiver's NIC answers a CE-marked\n  packet with a CNP, in hardware  ",
+                    color="#c0392b", fontcolor="#c0392b", constraint=false];
+  pcc    -> client [label="  4. new, lower send rate  ",
+                    style=dashed, color="#2e7d32", fontcolor="#2e7d32", constraint=false];
+}

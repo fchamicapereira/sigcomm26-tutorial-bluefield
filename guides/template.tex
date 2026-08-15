@@ -54,6 +54,19 @@ $common.latex()$
 
 \geometry{margin=2.4cm,top=2.0cm,bottom=2.2cm}
 
+% Pandoc's own default template sets this; ours replaces that template wholesale and so dropped it.
+% Restored here on its own merits -- it gives TeX a last-resort pass with extra stretchability, which
+% keeps ordinary prose from spilling into the margin.
+%
+% Do NOT expect it to fix the overfull lines these guides actually hit. Measured: the seven in
+% doca-flow.md were unchanged, to the point, with and without it. Those come from long unbreakable
+% \texttt tokens -- 30-to-40-character DOCA identifiers, absolute paths -- which have no hyphenation
+% points at all, so TeX has no better break to find however much slack it is given. The fix for
+% those is in the Markdown: shorten the token, or reword so it does not land mid-sentence.
+%
+% `make check` finds them. Pandoc does not report overfull boxes at all, so a plain build cannot.
+\setlength{\emergencystretch}{3em}
+
 % No section numbers. Guides name their sections "Step 1 -- ...", and LaTeX's own numbering on top
 % of that produces "2 Step 1 -- ...", which is worse than useless in a document people follow in
 % order while typing.

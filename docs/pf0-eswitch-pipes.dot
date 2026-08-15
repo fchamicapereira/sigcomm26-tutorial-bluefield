@@ -9,8 +9,17 @@
  * pipes created with DOCA_FLOW_PIPE_DOMAIN_DEFAULT, which is the FDB in switch mode). PF1's
  * domain is untouched — fdb_def_rule_en=1 leaves the kernel's default FDB rules in place there.
  *
- * Which table PORT_DEMUX sends wire ingress to depends on percent: the RANDOM_SAMPLE table is
- * only built for 0 < percent < 100, and ECN_MARK is not built at all at percent 0.
+ * Pipe names match doca_flow_ecn_pcap.c / the participant template exactly. Keep them in step:
+ * this figure is the map participants navigate the code by, and an out-of-date name here costs
+ * more than a missing figure would. (It has been wrong once already — it said ECN_MARK and
+ * INGRESS_PASSTHROUGH long after the code had moved to MARK_CAPTURE / PASSTHROUGH.)
+ *
+ * Two run-time choices are drawn rather than resolved, because the mechanism is the point:
+ *   - which table wire ingress lands in depends on --percent (RANDOM_SAMPLE exists only for
+ *     0 < percent < 100, and MARK_CAPTURE is not built at all at percent 0);
+ *   - the capture fan-out is a shared mirror on DOCA 2.x and a hash/flooding pipe on 3.x.
+ * Without --pcap there is no capture at all: MARK_CAPTURE and PASS_CAPTURE then forward straight
+ * to the SF and neither the fan-out nor TO_CPU is built.
  */
 digraph pf0_eswitch_pipes {
   /* Top-to-bottom, unlike the end-to-end figures. In rankdir=LR graphviz lays edge labels out as
@@ -23,48 +32,66 @@ digraph pf0_eswitch_pipes {
   fontsize=16;
   label="PF0's eSwitch table graph (DOCA Flow pipes)";
   nodesep=0.45;
-  ranksep=0.75;
-  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
-  edge [fontname="Helvetica", fontsize=9];
+  ranksep=0.65;
+  node [fontname="Helvetica", fontsize=13, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
+  edge [fontname="Helvetica", fontsize=11];
 
   /* vports: where packets enter and leave the eSwitch */
   in_p0 [label="p0\n(wire ingress)\nvport 0", fillcolor="#ffe8d1"];
   in_sf [label="mlx5_2\n(SF egress)\nvport 1", fillcolor="#dbe9ff"];
-  out_sf [label="mlx5_2", fillcolor="#dbe9ff"];
+  out_sf [label="mlx5_2\n(to receiver)", fillcolor="#dbe9ff"];
   out_p0 [label="p0\n(to wire)", fillcolor="#ffe8d1"];
   drop [label="DROP", fillcolor="#f8d7da", color="#c0392b", fontcolor="#c0392b"];
+  pcap [label="RX queue 0\n-> pcap", fillcolor="#e8e8e8"];
 
   subgraph cluster_pf0 {
-    label="eSwitch — PF0 domain";
+    label="eSwitch — PF0 domain (the pipes you write)";
     style="rounded";
     color="#666666";
     fontsize=12;
 
-    demux [label="PORT_DEMUX  (root)\nmatch: source vport id", fillcolor="#e6ddf5"];
+    demux  [label="PORT_DEMUX  (root)\nmatch: ingress vport", fillcolor="#e6ddf5"];
     sample [label="RANDOM_SAMPLE\nmatch: random & (2^i - 1) == 0?", fillcolor="#e6ddf5"];
-    ecn [label="ECN_MARK\nmatch: IPv4 → set CE", fillcolor="#e6ddf5"];
-    pass [label="INGRESS_PASSTHROUGH\n(no match, just forward)", fillcolor="#e6ddf5"];
+    mark   [label="MARK_CAPTURE\nmatch: IPv4 → set ECN CE, count", fillcolor="#e6ddf5"];
+    pass   [label="PASS_CAPTURE\nmatch: IPv4 → count", fillcolor="#e6ddf5"];
+    fanout [label="capture fan-out\n2.x: shared mirror\n3.x: FLOOD (hash, flooding)",
+            fillcolor="#fff3c4", style="rounded,filled,dashed"];
+    ptru   [label="PASSTHROUGH\n(no match, just forward)", fillcolor="#e6ddf5"];
+    tocpu  [label="TO_CPU\nFWD_RSS", fillcolor="#e6ddf5"];
   }
 
   /* both ingress directions land on the root table */
   in_p0 -> demux [color="#1a6fbf", fontcolor="#1a6fbf"];
   in_sf -> demux [color="#c0392b", fontcolor="#c0392b"];
 
-  /* root demuxes on source vport. The wire-ingress branch target is chosen once at startup by
-   * percent — exactly one of these three exists per run — but all three are drawn so the
+  /* root demuxes on the ingress vport. The wire-ingress branch target is chosen once at startup
+   * by --percent — exactly one of these three exists per run — but all three are drawn so the
    * mechanism is visible. Solid = a real path; dashed is reserved for miss/drop throughout. */
-  demux -> ecn [label="vport 0,\npercent=100", color="#1a6fbf", fontcolor="#1a6fbf"];
+  demux -> mark   [label="vport 0,\npercent=100", color="#1a6fbf", fontcolor="#1a6fbf"];
   demux -> sample [label="vport 0,\n0<percent<100", color="#1a6fbf", fontcolor="#1a6fbf"];
-  demux -> pass [label="vport 0,\npercent=0", color="#1a6fbf", fontcolor="#1a6fbf"];
-  demux -> out_p0 [label="vport 1 → output", color="#c0392b", fontcolor="#c0392b"];
-  demux -> drop [label="miss", color="#888888", fontcolor="#888888", style=dashed];
+  demux -> pass   [label="vport 0,\npercent=0", color="#1a6fbf", fontcolor="#1a6fbf"];
+  demux -> out_p0 [label="vport 1 → output\n(ACKs, CNPs — untouched)",
+                   color="#c0392b", fontcolor="#c0392b"];
+  demux -> drop   [label="miss", color="#888888", fontcolor="#888888", style=dashed];
 
   /* the sampler is a power-of-two approximation: it can only express 1/2^i, i = 1..16, so it
    * covers neither endpoint (0% is unreachable, and 100% would silently collapse to 50%). */
-  sample -> ecn [label="hit", color="#1a6fbf", fontcolor="#1a6fbf"];
-  sample -> pass [label="miss", color="#888888", fontcolor="#888888", style=dashed];
+  sample -> mark [label="hit", color="#1a6fbf", fontcolor="#1a6fbf"];
+  sample -> pass [label="miss\n(not selected)", color="#888888", fontcolor="#888888", style=dashed];
 
-  ecn -> pass [label="miss\n(non-ECT / already CE)", color="#888888", fontcolor="#888888", style=dashed];
-  ecn -> out_sf [label="output\n(CE marked)", color="#1a6fbf", fontcolor="#1a6fbf"];
-  pass -> out_sf [label="output\n(unmodified)", color="#1a6fbf", fontcolor="#1a6fbf"];
+  /* Both forwarding pipes do the same thing with a hit; only MARK_CAPTURE rewrites on the way. */
+  mark -> fanout [label="hit", color="#1a6fbf", fontcolor="#1a6fbf"];
+  pass -> fanout [label="hit", color="#1a6fbf", fontcolor="#1a6fbf"];
+  mark -> ptru [label="miss\n(non-IPv4)", color="#888888", fontcolor="#888888", style=dashed];
+  pass -> ptru [label="miss\n(non-IPv4)", color="#888888", fontcolor="#888888", style=dashed];
+
+  /* The fan-out is where the copy is taken — after the CE action, so the pcap shows marked
+   * packets. On 3.x the original really does travel via PASSTHROUGH (flooding entry 0); on 2.x
+   * the mirror sends it straight out to the vport. Drawn as the 3.x path since it is the one
+   * with a visible extra hop. */
+  fanout -> ptru  [label="original\n(3.x: flood entry 0)", color="#1a6fbf", fontcolor="#1a6fbf"];
+  fanout -> tocpu [label="copy\n(3.x: flood entry 1)", color="#7b5cb8", fontcolor="#7b5cb8"];
+
+  ptru -> out_sf [label="output", color="#1a6fbf", fontcolor="#1a6fbf"];
+  tocpu -> pcap  [label="to the Arm cores", color="#7b5cb8", fontcolor="#7b5cb8"];
 }

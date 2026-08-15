@@ -16,7 +16,7 @@ Layout it produces:
     doca-2/                       the exercise, built from doca-2/doca-flow/doca_flow_template.c
     doca-2-solutions/             the same program complete, from doca_flow_ecn_pcap.c
     doca-3/ doca-3-solutions/     ditto for the DOCA 3 tree
-    guides/tailscale.pdf          the rendered guide only, no LaTeX
+    guides/*.pdf                  the rendered guides only, no LaTeX (see GUIDES)
     scripts/                      run_server.sh, run_client.sh, benchmark.sh, check_ecn_bits...
     .vscode/                      IntelliSense paths for the DOCA/DPDK headers on the card
     .clang-format
@@ -50,6 +50,12 @@ VERSIONS = ["doca-2", "doca-3"]
 
 # Copied verbatim into scripts/, keeping the executable bit.
 SCRIPTS = ["run_server.sh", "run_client.sh", "benchmark.sh", "check_ecn_bits_from_pcap.sh"]
+
+# Rendered guides to hand over, by filename in guides/. The .md sources, template.tex, the logos
+# and the figures stay here -- participants get the PDF and nothing else, which is why this is a
+# list of built artefacts rather than a directory copy. Run `make -C guides` first: this script
+# does NOT build them, and copying a stale PDF is silent.
+GUIDES = ["tailscale.pdf", "doca-flow.pdf"]
 
 # Participant-only files kept here as real files rather than generated inline, so they can be
 # reviewed and edited directly. Mapped to their destination in the participant repo.
@@ -184,8 +190,11 @@ def main():
         for solutions in (False, True):
             build_version(dest, version, solutions, changes, args.dry_run)
 
-    copy(REPO / "guides" / "tailscale.pdf", dest / "guides" / "tailscale.pdf", changes,
-         args.dry_run)
+    for guide in GUIDES:
+        src = REPO / "guides" / guide
+        if not src.exists():
+            sys.exit(f"guides/{guide} has not been built -- run: make -C guides")
+        copy(src, dest / "guides" / guide, changes, args.dry_run)
     for script in SCRIPTS:
         src = REPO / script
         dst = dest / "scripts" / script
