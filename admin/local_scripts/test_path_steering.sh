@@ -85,7 +85,13 @@ bw_mean() {
 		$0 ~ /^[[:space:]]*[0-9]+([[:space:]]+[0-9.]+){4}[[:space:]]*$/ {v[++c]=$4}
 		END {if (!c) exit 1; s=c-n+1; if(s<1)s=1; for(i=s;i<=c;i++)t+=v[i]; printf "%.2f\n",t/(c-s+1)}' "$1"
 }
-counter_last() { sed -n "s/.*$2: \([0-9]*\) pkts.*/\1/p" "$1" | tail -1; }
+ce_counter_last() { # ce_counter_last <log> <0|1>
+	case "$2" in
+		0) sed -n 's/.*ingress newly CE-marked: path0=\([0-9]*\).*/\1/p' "$1" | tail -1 ;;
+		1) sed -n 's/.*ingress newly CE-marked: .*path1=\([0-9]*\).*/\1/p' "$1" | tail -1 ;;
+		*) return 2 ;;
+	esac
+}
 
 STEP_NAMES=(); STEP_STATES=(); STEP_DETAILS=(); STEP_DETAIL=""
 step() {
@@ -226,9 +232,9 @@ phase_path_distribution() {
 }
 phase_ecn_ratio() {
 	local p0a p1a p0b p1b d0 d1
-	p0a=$(counter_last "$INGRESS_LOG" 'path0 selected-class CE marked'); p1a=$(counter_last "$INGRESS_LOG" 'path1 selected-class CE marked')
+	p0a=$(ce_counter_last "$INGRESS_LOG" 0); p1a=$(ce_counter_last "$INGRESS_LOG" 1)
 	sleep "$WINDOW"
-	p0b=$(counter_last "$INGRESS_LOG" 'path0 selected-class CE marked'); p1b=$(counter_last "$INGRESS_LOG" 'path1 selected-class CE marked')
+	p0b=$(ce_counter_last "$INGRESS_LOG" 0); p1b=$(ce_counter_last "$INGRESS_LOG" 1)
 	[ -n "$p0a" ] && [ -n "$p1a" ] && [ -n "$p0b" ] && [ -n "$p1b" ] || { show_tail "$INGRESS_LOG"; STEP_DETAIL="missing ingress CE counters"; return 1; }
 	d0=$((p0b-p0a)); d1=$((p1b-p1a)); [ "$d0" -gt 0 ] && [ "$d1" -gt 0 ] || { STEP_DETAIL="CE deltas are path0=$d0 path1=$d1"; return 1; }
 	# CE counts scale with both marking probability and traffic volume. Compare
