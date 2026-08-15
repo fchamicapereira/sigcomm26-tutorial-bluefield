@@ -110,10 +110,10 @@ INGRESS_LOG="$LOGDIR/ingress.log"; PCC_LOG="$LOGDIR/pcc.log"
 P0_SERVER_LOG="$LOGDIR/path0-server.log"; P1_SERVER_LOG="$LOGDIR/path1-server.log"
 P0_CLIENT_LOG="$LOGDIR/path0-client.log"; P1_CLIENT_LOG="$LOGDIR/path1-client.log"
 
-PROJECT="$REPO/doca-3/pcc-path-steering"
-BUILD_DIR="$PROJECT/build"
-FLOW_BIN="$BUILD_DIR/doca_flow_steer"
-PCC_BIN="$BUILD_DIR/doca_pcc"
+PROJECT=""
+BUILD_DIR=""
+FLOW_BIN=""
+PCC_BIN=""
 SETUP="$REPO/admin/local_scripts/setup_path_steering.sh"
 
 CLEANUP_DONE=0
@@ -133,11 +133,20 @@ cleanup() {
 
 log "== preflight =="; log "   repo: $REPO"; log "   logs: $LOGDIR"
 [ -d "$REPO" ] || die "tutorial checkout missing"
-[ -f "$PROJECT/meson.build" ] || die "$PROJECT is absent; run git submodule update --init --recursive"
 [ -x "$SETUP" ] || die "$SETUP is missing"
 DOCA_VERSION=$("$REPO/admin/local_scripts/print_doca_version.sh" 2>/dev/null) || die "cannot determine DOCA version"
 emit doca "$DOCA_VERSION"
-case "$DOCA_VERSION" in 3.*) ;; *) emit verdict unsupported; emit subject "path steering is not yet ported to DOCA $DOCA_VERSION"; exit 1;; esac
+case "$DOCA_VERSION" in
+	2.7*|2.9*) VERSION_DIR=doca-2 ;;
+	3.*) VERSION_DIR=doca-3 ;;
+	*) emit verdict unsupported; emit subject "path steering does not target DOCA $DOCA_VERSION"; exit 1 ;;
+esac
+PROJECT="$REPO/$VERSION_DIR/pcc-path-steering"
+BUILD_DIR="$PROJECT/build"
+FLOW_BIN="$BUILD_DIR/doca_flow_steer"
+PCC_BIN="$BUILD_DIR/doca_pcc"
+[ -f "$PROJECT/meson.build" ] || die "$PROJECT is absent; run git submodule update --init --recursive"
+log "   doca: $DOCA_VERSION -> $VERSION_DIR"
 for command in meson ninja ib_write_bw pgrep stdbuf; do command -v "$command" >/dev/null || die "$command is missing"; done
 [ -x /opt/mellanox/doca/tools/dpacc ] || die "dpacc is missing"
 sudo -n true 2>/dev/null || die "passwordless sudo is required"
