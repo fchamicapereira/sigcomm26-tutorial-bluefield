@@ -277,5 +277,5 @@ for i in "${!STEP_NAMES[@]}"; do printf '   %-6s %-22s %s\n' "${STEP_STATES[$i]}
 [ "$PHASES_OK" -eq 1 ] && VERDICT=pass || VERDICT=fail
 emit path0_bw "${BW_PATH0:--}"; emit path1_bw "${BW_PATH1:--}"; emit total_bw "${BW_TOTAL:--}"; emit flow_ratio "${FLOW_RATIO:--}"; emit steer_path0_bw "${STEER_BW0:--}"; emit steer_path1_bw "${STEER_BW1:--}"; emit path_ratio "${PATH_RATIO:--}"; emit path0_ce "${CE_PATH0:--}"; emit path1_ce "${CE_PATH1:--}"
 emit ce_raw_ratio "${CE_RAW_RATIO:--}"; emit ce_ratio "${CE_RATIO:--}"; emit cm_map "${CM_MAP:-fail}"; emit applied_path0 "${APPLIED_PATH0:--}"; emit verdict "$VERDICT"
-if [ "$VERDICT" = pass ]; then SUBJECT="path0 ${BW_PATH0} Gb/s, path1 ${BW_PATH1} Gb/s, CE ratio ${CE_RATIO}, share ${APPLIED_PATH0}/64"; else SUBJECT="${FIRST_FAILURE:-unknown failure}"; fi
+if [ "$VERDICT" = pass ]; then SUBJECT="flows ${BW_PATH0}/${BW_PATH1} Gb/s; steering paths ${STEER_BW0}/${STEER_BW1} Gb/s (${PATH_RATIO}x); CE/Gb ${CE_RATIO}x; share ${APPLIED_PATH0}/64"; else SUBJECT="${FIRST_FAILURE:-unknown failure}"; fi
 emit subject "$SUBJECT"; log ""; log "verdict: $VERDICT — $SUBJECT"; [ "$VERDICT" = pass ]
