@@ -104,6 +104,12 @@ else
 	fi
 fi
 
+# Keep nested exercise repositories usable after both a clone and an update. The
+# tutorial's submodules are public HTTPS repositories, so this needs no deploy key.
+echo "initializing submodules"
+git_t submodule sync --recursive
+git_t submodule update --init --recursive
+
 emit action  "$action"
 emit sha     "$(git_t rev-parse --short HEAD)"
 emit branch  "$(git_t rev-parse --abbrev-ref HEAD)"
