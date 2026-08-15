@@ -214,9 +214,32 @@ phase_traffic() {
 }
 phase_mapping() {
 	log "   warming up for ${WARMUP}s"; sleep "$WARMUP"
-	grep -Eq 'REQ grouping: .* -> path0' "$PCC_LOG" && grep -Eq 'REQ grouping: .* -> path1' "$PCC_LOG" &&
-	grep -Eq 'RDMA-CM mapping: .* path0' "$PCC_LOG" && grep -Eq 'RDMA-CM mapping: .* path1' "$PCC_LOG" || { show_tail "$PCC_LOG" 80; STEP_DETAIL="did not complete mappings for both destination IPs"; return 1; }
-	CM_MAP=ok; STEP_DETAIL="completed path0 and path1 QPN mappings"
+	case "$DOCA_VERSION" in
+		2.*)
+			# DOCA 2 mirrors every UDP/4791 packet because its public Flow API
+			# cannot match BTH QPN. Under load QP1 clones may be dropped, so its
+			# supported fallback learns sender QPN -> path from feedback source IP.
+			if grep -Eq 'ingress feedback grouping: .* -> path0' "$PCC_LOG" &&
+			   grep -Eq 'ingress feedback grouping: .* -> path1' "$PCC_LOG"; then
+				QPN_MAP=feedback
+			elif grep -Eq 'PCC path-share diagnostic: path0 total=[1-9][0-9]* .*; path1 total=[1-9][0-9]* ' "$PCC_LOG"; then
+				# The diagnostic is authoritative steady-state evidence that both
+				# groups were populated even if their one-time learn logs rolled out.
+				QPN_MAP=feedback
+			else
+				show_tail "$PCC_LOG" 80
+				STEP_DETAIL="did not learn QPN groups for both paths from DOCA 2 feedback"
+				return 1
+			fi
+			STEP_DETAIL="learned path0 and path1 QPN groups from feedback packets"
+			;;
+		*)
+			grep -Eq 'REQ grouping: .* -> path0' "$PCC_LOG" && grep -Eq 'REQ grouping: .* -> path1' "$PCC_LOG" &&
+			grep -Eq 'RDMA-CM mapping: .* path0' "$PCC_LOG" && grep -Eq 'RDMA-CM mapping: .* path1' "$PCC_LOG" || { show_tail "$PCC_LOG" 80; STEP_DETAIL="did not complete RDMA-CM mappings for both destination IPs"; return 1; }
+			QPN_MAP=rdma-cm
+			STEP_DETAIL="completed path0 and path1 RDMA-CM QPN mappings"
+			;;
+	esac
 }
 phase_bandwidth() {
 	sleep "$WINDOW"
@@ -272,19 +295,19 @@ run_phases() {
 	step "ingress steering" phase_ingress || return 1
 	step "pcc egress steering" phase_pcc || return 1
 	step "two-path traffic" phase_traffic || return 1
-	step "rdma-cm mapping" phase_mapping || return 1
+	step "qpn path mapping" phase_mapping || return 1
 	step "balanced rdma flows" phase_bandwidth || return 1
 	step "steering distribution" phase_path_distribution || return 1
 	step "asymmetric ecn" phase_ecn_ratio || return 1
 	step "dynamic path share" phase_share || return 1
 }
 
-CM_MAP=""; BW_PATH0=""; BW_PATH1=""; BW_TOTAL=""; FLOW_RATIO=""; STEER_BW0=""; STEER_BW1=""; PATH_RATIO=""; CE_PATH0=""; CE_PATH1=""; CE_RAW_RATIO=""; CE_RATIO=""; APPLIED_PATH0=""
+QPN_MAP=""; BW_PATH0=""; BW_PATH1=""; BW_TOTAL=""; FLOW_RATIO=""; STEER_BW0=""; STEER_BW1=""; PATH_RATIO=""; CE_PATH0=""; CE_PATH1=""; CE_RAW_RATIO=""; CE_RATIO=""; APPLIED_PATH0=""
 PHASES_OK=1; run_phases || PHASES_OK=0; cleanup || true
 log ""; log "== summary =="; FIRST_FAILURE=""
 for i in "${!STEP_NAMES[@]}"; do printf '   %-6s %-22s %s\n' "${STEP_STATES[$i]}" "${STEP_NAMES[$i]}" "${STEP_DETAILS[$i]}"; [ "${STEP_STATES[$i]}" = FAIL ] && [ -z "$FIRST_FAILURE" ] && FIRST_FAILURE="${STEP_NAMES[$i]}: ${STEP_DETAILS[$i]}"; done
 [ "$PHASES_OK" -eq 1 ] && VERDICT=pass || VERDICT=fail
 emit path0_bw "${BW_PATH0:--}"; emit path1_bw "${BW_PATH1:--}"; emit total_bw "${BW_TOTAL:--}"; emit flow_ratio "${FLOW_RATIO:--}"; emit steer_path0_bw "${STEER_BW0:--}"; emit steer_path1_bw "${STEER_BW1:--}"; emit path_ratio "${PATH_RATIO:--}"; emit path0_ce "${CE_PATH0:--}"; emit path1_ce "${CE_PATH1:--}"
-emit ce_raw_ratio "${CE_RAW_RATIO:--}"; emit ce_ratio "${CE_RATIO:--}"; emit cm_map "${CM_MAP:-fail}"; emit applied_path0 "${APPLIED_PATH0:--}"; emit verdict "$VERDICT"
+emit ce_raw_ratio "${CE_RAW_RATIO:--}"; emit ce_ratio "${CE_RATIO:--}"; emit qpn_map "${QPN_MAP:-fail}"; emit applied_path0 "${APPLIED_PATH0:--}"; emit verdict "$VERDICT"
 if [ "$VERDICT" = pass ]; then SUBJECT="flows ${BW_PATH0}/${BW_PATH1} Gb/s; steering paths ${STEER_BW0}/${STEER_BW1} Gb/s (${PATH_RATIO}x); CE/Gb ${CE_RATIO}x; share ${APPLIED_PATH0}/64"; else SUBJECT="${FIRST_FAILURE:-unknown failure}"; fi
 emit subject "$SUBJECT"; log ""; log "verdict: $VERDICT — $SUBJECT"; [ "$VERDICT" = pass ]

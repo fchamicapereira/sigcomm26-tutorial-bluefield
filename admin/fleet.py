@@ -666,7 +666,7 @@ def cmd_test_path_steering(args: argparse.Namespace) -> int:
             ("FLOW0/FLOW1", "flow_ratio"),
             ("STEER P0/P1", "path_ratio"),
             ("CE/Gb P1/P0", "ce_ratio"),
-            ("CM MAP", "cm_map"),
+            ("QPN MAP", "qpn_map"),
             ("PATH0/64", "applied_path0"),
             ("VERDICT", "verdict"),
             ("NOTE", "@note"),
