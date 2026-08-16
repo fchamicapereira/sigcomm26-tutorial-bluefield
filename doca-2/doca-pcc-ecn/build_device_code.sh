@@ -17,11 +17,14 @@ BUILD_DIR=$2        # <meson build dir>/doca-pcc-ecn/device/build_dpacc
 DOCA_LIB_DIR=$3      # from `dependency('doca-common').get_variable(pkgconfig: 'libdir')`
 DOCA_INCLUDE_DIR=$4  # from `dependency('doca-common').get_variable(pkgconfig: 'includedir')`
 APP_NAME=$5          # pcc_ecn_rp_app
+ALGO=${6:-algo/rtt_template.c}   # which DPA algorithm source to compile, relative to SRC_DIR.
+                                 # Default: the finished pure-ECN controller. The tutorial's
+                                 # fill-in-the-blanks build passes algo/rtt_template_exercise.c.
 
 DOCA_TOOLS_DIR="$(dirname "${DOCA_INCLUDE_DIR}")/tools"
 DPACC="${DOCA_TOOLS_DIR}/dpacc"
 
-SRC_FILES="${SRC_DIR}/rp_main.c ${SRC_DIR}/algo/rtt_template.c"
+SRC_FILES="${SRC_DIR}/rp_main.c ${SRC_DIR}/${ALGO}"
 
 HOST_CC_FLAGS="-Wno-deprecated-declarations -Werror -Wall -Wextra"
 DEVICE_CC_FLAGS="-Wno-deprecated-declarations -Werror -Wall -Wextra -DSIMX_BUILD,-ffreestanding,-mcmodel=medany,-ggdb,-O2,-DE_MODE_LE,-Wdouble-promotion,-I${DOCA_INCLUDE_DIR}"

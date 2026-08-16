@@ -32,3 +32,27 @@ executable(DOCA_PREFIX + 'pcc_ecn_rp',
 	dependencies: app_dependencies + [pcc_ecn_rp_app_lib, libflexio_dep],
 	include_directories: app_inc_dirs,
 	install: false)
+
+# --- Tutorial fill-in variant: doca_pcc_ecn_rp_template -----------------------------------------
+# Identical to doca_pcc_ecn_rp, but its DPA algorithm is device/algo/rtt_template_exercise.c -- a
+# copy of rtt_template.c with the two reaction bodies (the CNP multiplicative decrease and the TX
+# additive increase) hollowed out to TODO 1 and TODO 2. It builds and runs, but does no rate
+# control until you fill them in. `diff` it against algo/rtt_template.c for the answer. Same fixed
+# app symbol (pcc_ecn_rp_app), a separate .a in its own build dir, so the two never collide.
+exercise_build_dir = meson.current_build_dir() / 'device' / 'build_dpacc_exercise'
+run_command(device_build_script,
+	meson.current_source_dir() / 'device',
+	exercise_build_dir,
+	doca_lib_dir,
+	doca_include_dir,
+	app_name,
+	'algo/rtt_template_exercise.c',
+	check: true)
+pcc_ecn_rp_exercise_lib = meson.get_compiler('c').find_library(app_name, dirs: exercise_build_dir, static: true)
+
+executable(DOCA_PREFIX + 'pcc_ecn_rp_template',
+	['host/pcc_ecn_rp.c'],
+	c_args: base_c_args,
+	dependencies: app_dependencies + [pcc_ecn_rp_exercise_lib, libflexio_dep],
+	include_directories: app_inc_dirs,
+	install: false)

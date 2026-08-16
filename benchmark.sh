@@ -39,17 +39,14 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TTYPLOT="$SCRIPT_DIR/ttyplot/ttyplot"
 
-if [ ! -x "$TTYPLOT" ]; then
-  echo "ERROR: ttyplot is not available at $TTYPLOT" >&2
-  if [ -e "$TTYPLOT" ]; then
-    echo "       It exists but is not executable — the build did not finish." >&2
-  elif [ -d "$SCRIPT_DIR/ttyplot" ]; then
-    echo "       The source is checked out but was never built." >&2
-  else
-    echo "       It has not been fetched." >&2
-  fi
-  echo "       Build it once with:  $SCRIPT_DIR/admin/local_scripts/setup_ttyplot.sh" >&2
-  exit 1
+# A live chart is nice but optional. Use ttyplot when it is built; otherwise fall back to plain
+# per-second throughput lines, so this script still launches both ends with one command everywhere
+# (the participant repo ships benchmark.sh but not ttyplot).
+HAVE_TTYPLOT=0
+if [ -x "$TTYPLOT" ]; then
+  HAVE_TTYPLOT=1
+else
+  echo "Note: ttyplot not found at $TTYPLOT -- showing plain throughput instead of a live chart." >&2
 fi
 
 CLEANED_UP=""
@@ -80,16 +77,24 @@ sudo ip netns exec "$SERVER_NETNS" \
 
 sleep 2 # let the server reach "waiting for client"
 
-echo "Starting client (live plot)..."
-sudo ip netns exec "$CLIENT_NETNS" \
-    stdbuf -oL ib_write_bw \
-    -d "$CLIENT_DEV" \
-    -x "$GID" \
-    -F \
-    ${USE_RDMA_CM:+-R} \
-    "$SERVER_IP" \
-    --report_gbits \
-    --run_infinitely \
-    -D "$INTERVAL_SEC" \
-| "${AWK[@]}" '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
-| "$TTYPLOT" -t "RoCE throughput (client -> server)" -u "Gb/s"
+echo "Starting client..."
+run_client() {
+  sudo ip netns exec "$CLIENT_NETNS" \
+      stdbuf -oL ib_write_bw \
+      -d "$CLIENT_DEV" \
+      -x "$GID" \
+      -F \
+      ${USE_RDMA_CM:+-R} \
+      "$SERVER_IP" \
+      --report_gbits \
+      --run_infinitely \
+      -D "$INTERVAL_SEC"
+}
+
+if [ "$HAVE_TTYPLOT" = 1 ]; then
+  run_client \
+    | "${AWK[@]}" '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
+    | "$TTYPLOT" -t "RoCE throughput (client -> server)" -u "Gb/s"
+else
+  run_client
+fi

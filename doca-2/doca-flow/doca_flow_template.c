@@ -720,7 +720,10 @@ static struct doca_flow_pipe *create_to_cpu_pipe(struct doca_flow_port *port) {
 // The two halves are easy to mix up: target.fwd decides where the COPY goes (into cpu_pipe, and so
 // to the pcap), while DOCA_TUT_MIRROR_SET_ORIG_FWD below decides where the ORIGINAL carries on.
 static void bind_capture_mirror(struct doca_flow_port *port, struct doca_flow_pipe *cpu_pipe) {
-  // TODO 1 -- your code here.
+  // TODO 3 (Stage 2) -- your code here.
+  // Configure the shared mirror so a COPY of each packet goes to cpu_pipe (and on to the pcap),
+  // while the original keeps forwarding. Builds no pipe -- see the comment above. Reached only with
+  // --pcap; pair it with the `if (mirror)` block you add to create_forward_to_sf_pipe (TODO 2).
   return;
 }
 
@@ -743,7 +746,13 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
                                                         bool mirror,
                                                         struct doca_flow_pipe *miss_pipe,
                                                         struct doca_flow_pipe_entry **out_entry) {
-  // TODO 2 -- your code here.
+  // TODO 2 (Stage 1) -- your code here.
+  // The marking pipe. Build it like create_passthrough_pipe, plus: a counter (monitor.counter_type)
+  // and -- when `mark` is true -- the action that rewrites dscp_ecn to CE (codepoint 11). Forward to
+  // port 1, miss -> miss_pipe, and hand the installed entry back via *out_entry.
+  //
+  // Stage 1: IGNORE the `mirror` parameter (it is only true with --pcap). In Stage 2 (TODO 3) you
+  // come back and add an `if (mirror)` block here that attaches the shared mirror.
   return NULL;
 }
 
@@ -759,7 +768,9 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
 static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
                                                    struct doca_flow_pipe *hit,
                                                    struct doca_flow_pipe *miss, uint16_t mask) {
-  // TODO 3 -- your code here.
+  // TODO 4 (optional) -- your code here.
+  // Match parser_meta.random under `mask` (a power of two minus one): ~1-in-(mask+1) packets hit and
+  // go to `hit` (the marking path); the rest go to `miss`. Only built for 0 < --percent < 100.
   return NULL;
 }
 
@@ -780,7 +791,10 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
 // The pipe-level forward is FWD_CHANGEABLE, which is DOCA's way of saying "each entry brings its
 // own" — that is what lets the two directions go different places.
 static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe *wire_target) {
-  // TODO 4 -- your code here.
+  // TODO 1 (Stage 1) -- your code here.
+  // The root pipe. Match parser_meta.port_meta, FWD_CHANGEABLE so each entry picks its own target,
+  // then add two entries: port_meta 0 (from the wire) -> wire_target; port_meta 1 (from the SF) ->
+  // port 0. (See the comment above for why the return direction must be forwarded unmarked.)
   return;
 }
 

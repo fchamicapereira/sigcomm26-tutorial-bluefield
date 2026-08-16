@@ -28,6 +28,9 @@ BUILD_DIR=$2        # <meson build dir>/doca-pcc-ecn/device/build_dpacc
 DOCA_LIB_DIR=$3     # from dependency('doca-common').get_variable(pkgconfig: 'libdir')
 DOCA_INCLUDE_DIR=$4 # from dependency('doca-common').get_variable(pkgconfig: 'includedir')
 APP_NAME=$5         # pcc_ecn_rp_app — must match the symbol host/pcc_ecn_rp.c declares extern
+ALGO=${6:-algo/rtt_template.c} # DPA algorithm source to compile, relative to SRC_DIR. Default: the
+                               # finished controller; the tutorial's fill-in build passes
+                               # algo/rtt_template_exercise.c.
 
 DOCA_TOOLS_DIR="$(dirname "${DOCA_INCLUDE_DIR}")/tools"
 DPACC="${DOCA_TOOLS_DIR}/dpacc"
@@ -37,7 +40,7 @@ FLEXIO_INCLUDE="${FLEXIO_INCLUDE:-/opt/mellanox/flexio/include}"
 # dpacc writes its own archive here, and its generated host stubs into KEEP_DIR. The archive meson
 # links is the one this script builds in KEEP_DIR afterwards.
 KEEP_DIR="${BUILD_DIR}/${APP_NAME}"
-SRC_FILES="${SRC_DIR}/rp_main.c ${SRC_DIR}/algo/rtt_template.c"
+SRC_FILES="${SRC_DIR}/rp_main.c ${SRC_DIR}/${ALGO}"
 ATTRIBUTES_YAML="${SRC_DIR}/dpa_app_attributes.yaml"
 ATTRIBUTES_BLOB="${BUILD_DIR}/${APP_NAME}_attributes.blob"
 
