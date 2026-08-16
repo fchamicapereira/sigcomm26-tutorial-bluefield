@@ -16,8 +16,11 @@
 #     image — perftest come from NVIDIA's install, and the distro's versions of some of those
 #     will happily conflict with it. Those are verified and reported, never installed. perftest
 #     is the one exception, installed only when ib_write_bw is missing entirely.
-#   * build ttyplot. That is setup_ttyplot.sh's job (it clones into the repo); this only puts its
-#     build dependencies in place so that script works.
+# It DOES, however, build ttyplot from source and install it to /usr/local/bin (see the ttyplot
+# section near the end). This is deliberate: there is no container, and participants receive ONLY
+# the participant repo (no admin/ tooling, no setup_ttyplot.sh), so benchmark.sh's live chart must
+# already be on the box -- the participant simply runs benchmark.sh and it is there, resolved on
+# PATH. Pre-provisioning it here (via `fleet.py deps --install`) is what makes that true fleet-wide.
 #
 # Machine-readable results are printed as '@@key=value' lines; everything else is log output.
 #
@@ -81,7 +84,7 @@ PACKAGES=(
 	# dpacc/DPDK use pyelftools when building the DPA algo.
 	python3-pyelftools
 
-	# setup_ttyplot.sh builds ttyplot from source for benchmark.sh's live throughput chart.
+	# Build deps for the ttyplot we compile from source below (benchmark.sh's live throughput chart).
 	libncurses-dev
 
 	# Driving the exercises: tmux for server+client side by side, ethtool for link state,
@@ -191,6 +194,34 @@ else
 	if [ ${#failed[@]} -gt 0 ]; then
 		die "apt reported success but these are still not installed: ${failed[*]}"
 	fi
+fi
+
+# --- ttyplot (built from source; Ubuntu does not package it) -----------------------------------
+# benchmark.sh draws its live throughput chart with ttyplot. There is no container and participants
+# get only the participant repo, so it cannot be fetched or built there on demand -- it has to be on
+# the box already. Build it from source (deps installed above) in a temp dir and install it to
+# /usr/local/bin, where benchmark.sh resolves it on PATH. Idempotent: skipped if already installed.
+TTYPLOT_BIN=/usr/local/bin/ttyplot
+if [ -x "$TTYPLOT_BIN" ] || command -v ttyplot >/dev/null 2>&1; then
+	echo "ttyplot already present ($(command -v ttyplot 2>/dev/null || echo "$TTYPLOT_BIN"))"
+elif [ "$INSTALL" -eq 0 ]; then
+	wanted+=("ttyplot(source)")
+	echo "missing (re-run with --install): ttyplot (built from source, not apt)"
+else
+	echo "building ttyplot from source -> $TTYPLOT_BIN"
+	ttyplot_tmp="$(mktemp -d)"
+	# Verify by the installed path, NOT `command -v`: fleet.py pipes this over a non-login SSH shell
+	# that may not carry /usr/local/bin on PATH, which would make a good install look like a failure.
+	if git clone --depth 1 https://github.com/tenox7/ttyplot.git "$ttyplot_tmp/src" \
+		&& make -C "$ttyplot_tmp/src" \
+		&& "${SUDO[@]}" install -m 0755 "$ttyplot_tmp/src/ttyplot" "$TTYPLOT_BIN" \
+		&& [ -x "$TTYPLOT_BIN" ]; then
+		added+=("ttyplot")
+	else
+		rm -rf "$ttyplot_tmp"
+		die "ttyplot build/install failed (see output above)"
+	fi
+	rm -rf "$ttyplot_tmp"
 fi
 
 join() { local IFS=,; if [ $# -eq 0 ]; then echo "-"; else echo "$*"; fi; }

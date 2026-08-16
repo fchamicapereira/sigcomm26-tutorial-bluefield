@@ -152,10 +152,11 @@ card's line rate:
 That **~92 Gb/s** is your proof the whole path works end to end: sender → `p1` → cable → `p0` → the
 eSwitch → receiver. If you see a table with a real number, Part A is done.
 
-> To avoid retyping the flags, the repo wraps these as scripts: `./scripts/run_server.sh` and
-> `./scripts/run_client.sh` (one per terminal), or **`./scripts/benchmark.sh`**, which starts both
-> ends together in a single command and streams the sender's throughput (Ctrl-C stops both). We use
-> `benchmark.sh` from Part C on.
+> You just ran the server and client by hand to see the moving parts. From here on you don't have
+> to: **`./scripts/benchmark.sh`** starts both ends together in one command and shows the sender's
+> goodput as a live, updating chart (Gb/s), so you never retype those flags again. (It wraps
+> `./scripts/run_server.sh` and `./scripts/run_client.sh` if you ever want them separately; Ctrl-C
+> stops everything.)
 
 </details>
 
@@ -409,13 +410,13 @@ where captured copies land — you'll use it in Stage 2, so set it aside for now
 With that shape in hand, you build your pipeline in **two stages**: **Stage 1** gets the NIC
 *marking* packets and forwarding them — you watch the counter climb; **Stage 2** adds a mirror so you
 can capture a copy and actually *see* the CE bit on the wire.
-[`build_pipeline()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L795) is where all the pieces connect.
+[`build_pipeline()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L809) is where all the pieces connect.
 
 #### Stage 1 — mark and forward
 
 Fill in **two** functions and leave the other two alone for now.
 
-**`create_root_pipe`** ([`TODO 1`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L782)) — the **root**. Every
+**`create_root_pipe`** ([`TODO 1`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L794)) — the **root**. Every
 packet hits this first; it sorts by the port a packet arrived on: from the wire → your marking pipe;
 coming back from the receiver → straight out the wire. It is the same idea as the root pipe in the
 Part B forwarder — two entries keyed on `parser_meta.port_meta`.
@@ -424,7 +425,7 @@ Part B forwarder — two entries keyed on `parser_meta.port_meta`.
 > carries the RoCE acknowledgements and congestion signals, and marking those would corrupt the
 > feedback the Part II controller depends on.
 
-**`create_forward_to_sf_pipe`** ([`TODO 2`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L742)) — the marking
+**`create_forward_to_sf_pipe`** ([`TODO 2`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L749)) — the marking
 pipe. Start from the `create_passthrough_pipe` shape shown above (match IPv4, forward to the
 receiver), then add two things:
 
@@ -436,42 +437,28 @@ receiver), then add two things:
 
 <br>
 
-**Step 1 — build the template and run it with the `--percent` argument:**
+**Step 1 — fill in `create_root_pipe` and `create_forward_to_sf_pipe`** (the root pipe and the
+marking pipe); leave the other two functions alone for now. When a pipe is wrong, DOCA prints a wall
+of red text — the **last** line is the one that matters, and it names the pipe that failed.
+
+**Step 2 — build it and run it, with traffic.** Build, start your program in Terminal 1, then start
+traffic with `benchmark.sh` in Terminal 2:
 ```bash
 cd doca-2 && meson setup build && ninja -C build
-sudo ./build/doca-flow/doca_flow_ecn_pcap -- --percent 100
+sudo ./build/doca-flow/doca_flow_ecn_pcap -- --percent 100   # Terminal 1 — leave it running
+./scripts/benchmark.sh                                        # Terminal 2 — server + client + chart
 ```
 > **INFO — the `--` and `--percent`.** The `--` is required: everything *before* it is for the DPDK
 > library, everything *after* it is for our program. For Stage 1 the only flag you need is
 > **`--percent N`** — CE-mark this share of packets, `0`–`100` (default `100` = mark everything).
 > (The program also accepts `--pcap` and `--sample`; those come in Stage 2 and the optional step.)
 
-**You should see** it start with no errors — but it **forwards nothing** yet: while it runs, even a
-`ping` between `ns0` and `ns1` is 100% lost. Stop it (Ctrl-C) and the link returns.
-
-> **NOTE:** not a bug — it's the Part B lesson in action. Your program owns the data path the moment
-> it starts, and an empty pipeline moves nothing. Once your **root pipe** exists and points at your
-> **marking pipe**, traffic flows again.
-
-**Step 2 — fill in `create_root_pipe` and `create_forward_to_sf_pipe`**, rebuild (`ninja -C build`),
-and re-run. When a pipe is wrong, DOCA prints a wall of red text; the **last** line is the one that
-matters and it names the pipe that failed.
-
-**Step 3 — turn on traffic and watch the report.** In one more terminal, start traffic with the
-benchmark script — it runs the server and client together and streams the sender's throughput. Leave
-it running:
-```bash
-./scripts/benchmark.sh
-```
-Your marking program (from Step 2) prints a line once a second — with no capture it looks like:
+Your marking program prints a line once a second — with no capture it looks like:
 ```
 CE marked: 57060637, passthrough: 0 (100% marked)
 ```
 **`CE marked:` climbing** means packets are flowing through your marking pipe, and `benchmark.sh`
 should show near line rate (~92 Gb/s) at the same time. You are marking packets in hardware.
-
-> You can't *see* the CE bit yet — the counter only proves packets went *through* your marking pipe.
-> Seeing the actual mark on the wire is exactly what Stage 2 adds.
 
 </details>
 
@@ -483,7 +470,7 @@ in the `create_to_cpu_pipe` you set aside earlier (already written for you).
 
 Two small additions, both about the mirror:
 
-**1. `bind_capture_mirror`** ([`TODO 3`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L722)). It builds no
+**1. `bind_capture_mirror`** ([`TODO 3`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L723)). It builds no
 pipe — it configures a shared "mirror" resource and points it at `cpu_pipe`, so a *copy* of each
 packet is delivered to the CPU (and your pcap) while the original keeps forwarding. Follow the
 step-by-step in the comment above it.
@@ -534,7 +521,7 @@ capturing costs no throughput.
 #### Going further (optional) — mark only some packets
 
 So far every packet is marked (`--percent 100`). To mark only a fraction, fill in the last function,
-**`create_sampling_pipe`** ([`TODO 4`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L759)): it matches the
+**`create_sampling_pipe`** ([`TODO 4`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L771)): it matches the
 NIC's built-in random field (`parser_meta.random`) so that 1-in-N packets take the marking path and
 the rest are forwarded unmarked. Then run, for example:
 ```bash

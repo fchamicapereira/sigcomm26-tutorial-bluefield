@@ -8,3 +8,4 @@ admin/results
 *.pcap
 .DS_Store
 .participants
+__pycache__/
