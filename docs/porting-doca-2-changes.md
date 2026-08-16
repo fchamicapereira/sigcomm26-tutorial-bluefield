@@ -174,91 +174,83 @@ belonged above the `if`, not above the `}`.
 
 ### 4. The participant template
 
-`doca_flow_template.c` is `doca_flow_ecn_pcap.c` with four function bodies emptied:
-`bind_capture_mirror`, `create_forward_to_sf_pipe`, `create_sampling_pipe`, `create_root_pipe`.
-`create_passthrough_pipe` and `create_to_cpu_pipe` stay implemented as the worked examples, and
-`build_pipeline` stays implemented so the topology is given.
+`doca_flow_template.c` is derived from `doca_flow_ecn_pcap.c` by
+[`admin/local_scripts/regen_templates.py`](../admin/local_scripts/regen_templates.py). **Never
+hand-edit it** -- run the script, which rebuilds both trees' templates and has a `--check` mode that
+fails if a solution has moved on without one.
 
-`create_to_cpu_pipe` is the one that can be given away for free: it takes only `port`, so it depends
-on nothing a participant has yet to write, and nothing reaches it until `bind_capture_mirror` aims
-the mirror at it. Handing over any of the other four instead would break the minute-zero invariant
-below — `create_root_pipe`, for instance, would install an entry forwarding to `wire_target`, which
-is `NULL` until `create_forward_to_sf_pipe` exists.
+Two differences from the solution, and no others:
 
-Also added: a `flow_template` executable in `doca-flow/meson.build`, and
-`doca_flow_template.README.md` (draft guidance — superseded once a proper participant guide
-exists, and no longer referenced from the code).
+1. **Three bodies are emptied** to a `TODO n` stub. The numbers are the order the guide asks for
+   them, not the order they appear in the file:
+
+   | | `doca-2` | `doca-3` | |
+   | --- | --- | --- | --- |
+   | `TODO 1` | `create_forward_to_sf_pipe` | `create_forward_to_sf_pipe` | the CE marking |
+   | `TODO 2` | `bind_capture_mirror` | `create_flood_pipe` | the capture copy |
+   | `TODO 3` | `create_sampling_pipe` | `create_sampling_pipe` | the 1-in-N split |
+
+2. **`build_pipeline` is replaced** with a version wired as a plain forwarder, with the ECN pipeline
+   present but commented out.
+
+`create_passthrough_pipe`, `create_to_cpu_pipe` and `create_root_pipe` are all given, as worked
+examples.
+
+#### The template runs as `doca_flow_nop`
+
+This replaced an earlier design in which the untouched template **blackholed every packet**, because
+`doca_flow_port_start` takes ownership of PF0's eSwitch whether or not any pipe exists and there was
+no root pipe. That was defensible -- it taught "your program owns the data path" on the first run --
+but it meant a participant's first experience was a program that broke the link, and the guide had
+to spend a paragraph insisting this was intentional.
+
+Now the template ships wired as a no-op forwarder: `create_root_pipe(port, passthrough)` and nothing
+else. Run it and traffic flows at line rate, unmarked. The exercise begins by commenting out that
+one line and uncommenting the ECN block under it.
+
+That is why `create_root_pipe` had to stop being a TODO -- the no-op configuration needs it. It is
+also why the old rationale for which functions could be given away no longer applies: it used to be
+that `create_to_cpu_pipe` was the only safe one, since it takes just `port`.
+
+**Expect unused-function warnings on a fresh template.** With the ECN block commented out,
+`get_random_mask`, `create_to_cpu_pipe` and the three TODO functions are never referenced, and
+`-Wall` reports each as "defined but not used". Five warnings, and they clear as the participant
+uncomments. The guide tells them to expect this. **Not verified on a card** -- reasoned from
+`-Wall` semantics, since meson's default `warning_level=1` adds it.
 
 #### Invariants that make it work
 
 These were each arrived at the hard way. Breaking any of them makes the template worse in a way
 that is not obvious until someone uses it.
 
-- **The template is byte-identical to the solution except the four bodies.** Same file header, same
-  `DOCA_LOG_REGISTER` tag, same `doca_argp_init` program name. Consequence: `--help` and the log
-  lines read `doca_flow_ecn_pcap` in both binaries. That is deliberate — it keeps
-  `diff doca_flow_template.c doca_flow_ecn_pcap.c` down to the participant's own work.
-- **No comment ever differs.** Guidance goes in the guide, not in the source, or the diff fills up
-  with comment churn instead of code.
-- **`build_pipeline` stays implemented.** With it present and the four stubs returning `NULL`,
-  there are no DOCA calls to fail: the unmodified template *compiles and runs*, reporting
-  `CE marked: 0` and forwarding nothing. Participants get a working program at minute zero and fill
-  in one pipe at a time. Empty the assembly too and it dies during setup instead.
-- **Each stub body is two lines — a comment plus an explicit `return`.** A lone comment, or a
+- **The template is byte-identical to the solution except the three bodies and `build_pipeline`.**
+  Same file header, same `DOCA_LOG_REGISTER` tag, same `doca_argp_init` program name. Consequence:
+  `--help` and the log lines read `doca_flow_ecn_pcap` in both binaries. That is deliberate -- it
+  keeps `diff doca_flow_template.c doca_flow_ecn_pcap.c` down to the participant's own work plus one
+  function they were told about.
+- **No comment ever differs**, outside `build_pipeline`. Guidance goes in the guide, not the source,
+  or the diff fills up with comment churn instead of code.
+- **The unmodified template compiles, runs, and forwards.** Participants get a working program at
+  minute zero. Empty `build_pipeline` too and it forwards nothing, which is where this started.
+- **Each stub body is two lines -- a comment plus an explicit `return`.** A lone comment, or a
   comment with a trailing `return NULL;`, is short enough that clang-format collapses the whole
   function onto one line (Google style sets `AllowShortFunctionsOnASingleLine: All`). The explicit
-  `return;` in the two `void` stubs exists only to prevent that.
-- **Regenerate rather than hand-edit.** After any change to the solution, re-derive the template so
-  the two cannot drift.
+  `return;` in a `void` stub exists only to prevent that.
+- **Regenerate rather than hand-edit.** After any change to a solution, re-run the script.
 
-#### Regeneration recipe
-
-Run from the version's `doca-flow/` directory. Re-derives the template from the current solution,
-so it also serves as the port to another tree — only the function-name list changes.
+#### Regeneration
 
 ```bash
-cp doca_flow_ecn_pcap.c doca_flow_template.c && python3 - <<'PY'
-import pathlib
-p = pathlib.Path("doca_flow_template.c")
-lines = p.read_text().split("\n")
-for name, n, ret in [("bind_capture_mirror", 1, "  return;"),
-                     ("create_forward_to_sf_pipe", 2, "  return NULL;"),
-                     ("create_sampling_pipe", 3, "  return NULL;"),
-                     ("create_root_pipe", 4, "  return;")]:
-    body = ["  // TODO %d -- your code here." % n, ret]
-    start = next(i for i, l in enumerate(lines) if l.startswith("static") and (name + "(") in l)
-    o = start
-    while not lines[o].rstrip().endswith("{"):
-        o += 1
-    c = o + 1
-    while lines[c] != "}":
-        c += 1
-    lines[o + 1:c] = body
-p.write_text("\n".join(lines))
-PY
-clang-format -i doca_flow_template.c
-diff -u doca_flow_ecn_pcap.c doca_flow_template.c   # expect only the four bodies
+admin/local_scripts/regen_templates.py            # rewrite both templates
+admin/local_scripts/regen_templates.py --check    # verify, change nothing (use before a release)
 ```
 
-For `doca-3` the capture path is a **hash-flooding pipe**, not a shared mirror, so the function
-list differs — `create_flood_pipe` replaces `bind_capture_mirror` as TODO 1, and there is no
-`MIRROR_ID` binding to write. The exercise is otherwise the same shape, and the substitution in the
-recipe above is the only change needed:
+The script holds the no-op `build_pipeline` text for both trees, the per-tree stub lists, and runs
+`clang-format -i` afterwards. The one gotcha it inherits: clang-format never re-joins adjacent string
+literals, so if a solution and its template were split at different points by an earlier column
+limit they stay different. Regenerating from the freshly formatted solution fixes it; reformatting
+the two files independently does not.
 
-```python
-for name, n, ret in [("create_flood_pipe", 1, "  return NULL;"),      # was bind_capture_mirror
-                     ("create_forward_to_sf_pipe", 2, "  return NULL;"),
-                     ("create_sampling_pipe", 3, "  return NULL;"),
-                     ("create_root_pipe", 4, "  return;")]:
-```
-
-Note TODO 1 returns `NULL` here rather than being `void`, so `doca-3` has one `void` stub where
-`doca-2` has two. The "two lines per body" invariant still holds either way.
-
-One gotcha seen while reformatting: clang-format never re-joins adjacent string literals, so if the
-solution and template were split at different points by an earlier column limit, they stay
-different. Regenerating the template from the freshly formatted solution fixes it; reformatting the
-two files independently does not.
 
 ## What `doca-3` required differently
 

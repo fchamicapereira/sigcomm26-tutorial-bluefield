@@ -756,7 +756,7 @@ static struct doca_flow_pipe *create_to_cpu_pipe(struct doca_flow_port *port) {
 static struct doca_flow_pipe *create_flood_pipe(struct doca_flow_port *port,
                                                 struct doca_flow_pipe *production_pipe,
                                                 struct doca_flow_pipe *capture_pipe) {
-  // TODO 1 -- your code here.
+  // TODO 2 -- your code here.
   return NULL;
 }
 
@@ -780,7 +780,7 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
                                                         struct doca_flow_pipe *flood_pipe,
                                                         struct doca_flow_pipe *miss_pipe,
                                                         struct doca_flow_pipe_entry **out_entry) {
-  // TODO 2 -- your code here.
+  // TODO 1 -- your code here.
   return NULL;
 }
 
@@ -817,53 +817,120 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
 // The pipe-level forward is FWD_CHANGEABLE, which is DOCA's way of saying "each entry brings its
 // own" — that is what lets the two directions go different places.
 static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe *wire_target) {
-  // TODO 4 -- your code here.
-  return;
+  struct doca_flow_pipe_cfg *cfg;
+
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_create(&cfg, port));
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_name(cfg, "PORT_DEMUX"));
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT));
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_is_root(cfg, true));
+
+  // One entry per direction: in from the wire, and back from the receiver SF.
+  const uint32_t nb_entries = 2;
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
+
+  // A full mask on the ingress port: it is compared exactly, and each entry supplies the port it
+  // matches.
+  struct doca_flow_match match = {0}, match_mask = {0};
+  match.parser_meta.port_id = UINT16_MAX;
+  match_mask.parser_meta.port_id = UINT16_MAX;
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
+
+  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_CHANGEABLE};
+  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_DROP};
+  struct doca_flow_pipe *pipe;
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
+
+  doca_flow_pipe_cfg_destroy(cfg);
+
+  struct entry_batch_status install_status = {0};
+  struct doca_flow_pipe_entry *entry;
+  struct doca_flow_match entry_match = {0};
+  struct doca_flow_fwd entry_fwd = {0};
+
+  // From the wire: on to the head of the marking chain. WAIT_FOR_BATCH holds this entry back so it
+  // reaches the hardware together with the one below.
+  entry_match.parser_meta.port_id = PF_PORT_ID;
+  entry_fwd.type = DOCA_FLOW_FWD_PIPE;
+  entry_fwd.next_pipe = wire_target;
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_basic_add_entry(
+                               PIPE_QUEUE, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                               DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &install_status, &entry));
+
+  // From the receiver SF: straight back out of the uplink, untouched.
+  entry_match.parser_meta.port_id = SF_REP_PORT_ID;
+  memset(&entry_fwd, 0, sizeof(entry_fwd));
+  entry_fwd.type = DOCA_FLOW_FWD_PORT;
+  entry_fwd.port_id = PF_PORT_ID;
+  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_basic_add_entry(
+                               PIPE_QUEUE, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
+                               DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &install_status, &entry));
+
+  DOCA_CHECK("PORT_DEMUX",
+             doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries));
+  doca_check((install_status.failure || install_status.nb_processed != nb_entries)
+                 ? DOCA_ERROR_BAD_STATE
+                 : DOCA_SUCCESS,
+             "PORT_DEMUX: install");
+  DOCA_LOG_INFO("Port demux ready");
 }
 
 // Build the PF0 pipeline, and report back the handles the rest of the program needs. This is the
 // whole of the DOCA Flow work: everything before it is device and library setup, everything after
 // it is the runtime loop.
 //
-// Which pipes exist depends on the options: the RSS pipe and the mirror only when --pcap asked for
-// a capture, MARK_CAPTURE only when --percent is above zero, and RANDOM_SAMPLE only when --percent
-// is strictly between the two extremes (at 0 or 100 the wire feeds one capture pipe directly, with
-// no sampling stage to pay for).
+// AS SHIPPED this builds a plain forwarder and nothing else -- the same data path doca_flow_nop
+// provides. Wire ingress goes straight to the receiver SF untouched, whatever comes back from the
+// SF goes straight out to the wire, and traffic runs at line rate with no marking and no capture.
+//
+// THE EXERCISE is to turn that into the ECN pipeline: comment out the one line of no-op wiring
+// below, uncomment the block under it, and implement the three TODOs it calls. Which pipes that
+// block builds depends on the options -- the RSS pipe and the mirror only when --pcap asked for a
+// capture, MARK_CAPTURE only when --percent is above zero, and RANDOM_SAMPLE only when --percent is
+// strictly between the two extremes.
+//
+// Until you uncomment it, the compiler reports the functions it would have called as "defined but
+// not used". That is expected, and those warnings are how you know you have not wired them up yet.
 static void build_pipeline(struct doca_flow_port *port, const struct app_config *cfg,
                            struct pipeline *out) {
-  bool capture = (cfg->pcap_path != NULL);
-
-  // PASSTHROUGH is built first here, unlike the 2.x build: it doubles as the flooding pipe's
-  // ordered production target, so it has to exist before FLOOD can point at it.
+  // Both configurations need this pipe. In the no-op it IS the data path; in the ECN pipeline it is
+  // where the two marking pipes send whatever they do not match.
   struct doca_flow_pipe *passthrough = create_passthrough_pipe(port);
 
-  struct doca_flow_pipe *flood = NULL;
-  if (capture) {
-    struct doca_flow_pipe *cpu = create_to_cpu_pipe(port);
-    flood = create_flood_pipe(port, passthrough, cpu);
-  }
+  // ---------------- NO-OP CONFIGURATION: comment out this line for the exercise. --------------
+  create_root_pipe(port, passthrough);
 
-  // PASS_CAPTURE (no mark) and MARK_CAPTURE (CE-mark); both fan out to the pcap when capturing.
-  struct doca_flow_pipe *pass_cap =
-      create_forward_to_sf_pipe(port, false, flood, passthrough, &out->pass_entry);
-  struct doca_flow_pipe *mark_cap = NULL;
-  if (cfg->random_percent > 0.0)
-    mark_cap = create_forward_to_sf_pipe(port, true, flood, passthrough, &out->ce_entry);
-
-  // wire-ingress entry point per --percent
-  struct doca_flow_pipe *wire_target;
-  if (cfg->random_percent >= 100.0)
-    // mark+capture all
-    wire_target = mark_cap;
-  else if (cfg->random_percent <= 0.0)
-    // capture all, mark none
-    wire_target = pass_cap;
-  else {
-    out->sample_mask = get_random_mask(cfg->random_percent);
-    wire_target = create_sampling_pipe(port, mark_cap, pass_cap, out->sample_mask);
-  }
-
-  create_root_pipe(port, wire_target);
+  // ---------------- ECN CONFIGURATION: uncomment everything below. -----------------------------
+  //
+  // bool capture = (cfg->pcap_path != NULL);
+  //
+  // struct doca_flow_pipe *flood = NULL;
+  // if (capture) {
+  //   struct doca_flow_pipe *cpu = create_to_cpu_pipe(port);
+  //   flood = create_flood_pipe(port, passthrough, cpu);
+  // }
+  //
+  // // PASS_CAPTURE (no mark) and MARK_CAPTURE (CE-mark); both fan out to the pcap when capturing.
+  // struct doca_flow_pipe *pass_cap =
+  //     create_forward_to_sf_pipe(port, false, flood, passthrough, &out->pass_entry);
+  // struct doca_flow_pipe *mark_cap = NULL;
+  // if (cfg->random_percent > 0.0)
+  //   mark_cap = create_forward_to_sf_pipe(port, true, flood, passthrough, &out->ce_entry);
+  //
+  // // wire-ingress entry point per --percent
+  // struct doca_flow_pipe *wire_target;
+  // if (cfg->random_percent >= 100.0)
+  //   // mark+capture all
+  //   wire_target = mark_cap;
+  // else if (cfg->random_percent <= 0.0)
+  //   // capture all, mark none
+  //   wire_target = pass_cap;
+  // else {
+  //   out->sample_mask = get_random_mask(cfg->random_percent);
+  //   wire_target = create_sampling_pipe(port, mark_cap, pass_cap, out->sample_mask);
+  // }
+  //
+  // create_root_pipe(port, wire_target);
 }
 
 int main(int argc, char **argv) {
