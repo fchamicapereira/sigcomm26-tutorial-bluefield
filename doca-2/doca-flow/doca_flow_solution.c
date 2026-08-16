@@ -19,17 +19,25 @@ DOCA_LOG_REGISTER(FLOW_ECN);
 #define NB_QUEUES 1
 #define RANDOM_FIELD_WIDTH 16
 
-// The two DPDK ports this program forwards between, and why they hold these values.
+// The two DPDK ports this program forwards between.
 //
-// DPDK numbers ethdevs in the order they are probed, and open_and_probe_dev() probes exactly two:
-// doca_dpdk_port_probe() brings up the PF uplink itself, and its devargs ask for one representor
-// ("representor=sf0"), the receiver SF's. The PF is therefore always 0 and that representor always
-// 1 — it is the probe string that decides this, not anything about the hardware, so changing the
-// devargs is what would change these ids.
+//   PF_PORT_ID      p0, the uplink. THE WIRE -- not an endpoint, and not a side of the tutorial's
+//                   client/server pair. The client is not on PF0 at all: it is an SF on PF1, and
+//                   its traffic reaches this program over the cable between the two ports. So
+//                   traffic ARRIVING from PF_PORT_ID came from the client, and traffic FORWARDED
+//                   to PF_PORT_ID is on its way back to the client. Which end it stands for
+//                   depends on the direction, and create_root_pipe() uses it both ways: once as a
+//                   match (packets that arrived here) and once as a destination (send it out
+//                   here).
+//   SF_REP_PORT_ID  the receiver SF's representor. THE SERVER, always -- the local end, on this
+//                   card's PF0, reached through mlx5_2 inside ns0.
 //
-// Both directions of the eSwitch need one of them as a forwarding target: wire traffic is sent on
-// to the SF, and what comes back from the SF is sent out of the uplink. find_pf_port_id() derives
-// the PF's id independently at startup, by finding the one ethdev that is not a representor, so a
+// Why those numbers: DPDK numbers ethdevs in the order they are probed, and open_and_probe_dev()
+// probes exactly two: doca_dpdk_port_probe() brings up the PF uplink itself, and its devargs ask
+// for one representor ("representor=sf0"), the receiver SF's. The PF is therefore always 0 and
+// that representor always 1 — it is the probe string that decides this, not anything about the
+// hardware, so changing the devargs is what would change these ids. find_pf_port_id() derives the
+// PF's id independently at startup, by finding the one ethdev that is not a representor, so a
 // mismatch there would surface rather than corrupt the pipeline silently.
 #define PF_PORT_ID 0
 #define SF_REP_PORT_ID 1
@@ -408,8 +416,11 @@ static void run_report_loop(const struct pipeline *pl) {
 // SF. No counter and no CE marking: it moves the packet and does nothing else, which makes it the
 // smallest complete instance of the five-part shape every pipe in this file follows.
 //
-// build_pipeline() hands it to both forwarding pipes as their miss target, so whatever they do not
-// match still reaches the receiver rather than being dropped.
+// build_pipeline() aims the root pipe here in D.1, before there is anything else to aim it at.
+// After that nothing forwards to it: MARK and PASS were briefly its only callers, as their miss
+// target, but a miss there means "not IPv4" and this pipe wants IPv4 too -- so such a packet missed
+// twice and was dropped anyway. They now send their misses straight to the SF, and this pipe stays
+// as D.1's target and as the example the other two are modelled on.
 static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *port) {
   struct doca_flow_pipe_cfg *cfg;
 
@@ -456,9 +467,14 @@ static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *por
 //   MARK   mark=true    forward it, setting ECN CE on the way through
 //
 // Whichever instance, the constant behaviour is the same: match IPv4 regardless of the ECN bits it
-// arrived with, count it, and forward to port 1. Anything that does not match goes to miss_pipe.
+// arrived with, count it, and forward to port 1.
 // The counter is not incidental -- it is what the once-a-second "CE marked: / passthrough:" report
 // queries, and without it there is no way to see whether the pipeline is doing anything.
+//
+// HIT AND MISS BOTH FORWARD TO THE SF, so nothing is dropped here. What the match decides is what
+// gets COUNTED, and when `mark` is set, MARKED -- non-IPv4 (ARP and the like) misses and goes on
+// untouched and uncounted. That matters: create_root_pipe_nop() forwards everything, so a pipeline
+// that dropped non-IPv4 would be less transparent than the no-op it replaces.
 //
 // `mark` is the only thing that differs between the two: it attaches the action that rewrites
 // dscp_ecn to CE. That is not what the pipe is FOR -- forwarding is -- which is why the ECN part of
@@ -466,7 +482,6 @@ static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *por
 //
 // out_entry hands the installed entry back so the report can query its counter.
 static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *port, bool mark,
-                                                        struct doca_flow_pipe *miss_pipe,
                                                         struct doca_flow_pipe_entry **out_entry) {
   const char *name = mark ? "MARK" : "PASS";
   struct doca_flow_pipe_cfg *cfg;
@@ -490,13 +505,18 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
   // how dscp_ecn is treated here: MARK has to catch packets that arrive already CE-marked as
   // readily as fresh ones. l3_type has no mask entry, so it is compared exactly.
   struct doca_flow_match match = {0}, match_mask = {0};
+  struct doca_flow_actions action_template = {0}, *action_templates[1] = {&action_template};
+  struct doca_flow_monitor monitor = {0};
+  struct doca_flow_fwd fwd_hit = {0};
+  struct doca_flow_fwd fwd_miss = {0};
+  struct doca_flow_pipe *pipe = NULL;
+
   match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
   match.outer.ip4.dscp_ecn = 0xFF;
   match_mask.outer.ip4.dscp_ecn = 0x00;
   DOCA_CHECK(name, doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
 
   // 0xFF is the action template ("entries may write this field"); the per-entry value follows below
-  struct doca_flow_actions action_template = {0}, *action_templates[1] = {&action_template};
   if (mark) {
     action_template.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
     action_template.outer.ip4.dscp_ecn = 0xFF;
@@ -504,15 +524,15 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
   }
 
   // The counter is what query_pkts() reads for the once-a-second report.
-  struct doca_flow_monitor monitor = {0};
   monitor.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;
   DOCA_CHECK(name, doca_flow_pipe_cfg_set_monitor(cfg, &monitor));
 
   // Finally create the pipe itself.
   // We will later add the single entry to it, which is what actually makes it do anything.
-  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_PORT, .port_id = SF_REP_PORT_ID};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = miss_pipe};
-  struct doca_flow_pipe *pipe;
+  fwd_hit.type = DOCA_FLOW_FWD_PORT;
+  fwd_hit.port_id = SF_REP_PORT_ID;
+  fwd_miss.type = DOCA_FLOW_FWD_PORT;
+  fwd_miss.port_id = SF_REP_PORT_ID;
   DOCA_CHECK(name, doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
 
   // pipe_create() has read the whole cfg and the pipe keeps no reference to it.
@@ -522,6 +542,8 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
   // ("Congestion Experienced"), the mark the PCC exercise in Part IV reacts to. action_idx picks
   // which of the cfg's action templates this fills in — there is only one, at index 0.
   struct doca_flow_actions entry_actions = {0};
+  struct entry_batch_status install_status = {0};
+
   if (mark) {
     entry_actions.action_idx = 0;
     entry_actions.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
@@ -533,7 +555,6 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
 
   // The NULL is this entry's own forward: it has none, so it inherits the pipe's. install_status is
   // an opaque context, handed straight back to entry_process_cb().
-  struct entry_batch_status install_status = {0};
   DOCA_CHECK(name, doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match, mark ? &entry_actions : NULL,
                                             &monitor, NULL, DOCA_FLOW_NO_WAIT, &install_status,
                                             out_entry));
@@ -578,13 +599,18 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
   DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
 
   struct doca_flow_match match = {0}, match_mask = {0};
+  struct doca_flow_fwd fwd_hit = {0};
+  struct doca_flow_fwd fwd_miss = {0};
+  struct doca_flow_pipe *pipe = NULL;
+
   match.parser_meta.random = 0;
   match_mask.parser_meta.random = mask;
   DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
 
-  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = hit};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = miss};
-  struct doca_flow_pipe *pipe;
+  fwd_hit.type = DOCA_FLOW_FWD_PIPE;
+  fwd_hit.next_pipe = hit;
+  fwd_miss.type = DOCA_FLOW_FWD_PIPE;
+  fwd_miss.next_pipe = miss;
   DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
 
   doca_flow_pipe_cfg_destroy(cfg);
@@ -593,6 +619,7 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
   // both outcomes are decided by the pipe's own two forwards.
   struct entry_batch_status install_status = {0};
   struct doca_flow_pipe_entry *entry;
+
   DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match, NULL, NULL, NULL,
                                                        DOCA_FLOW_NO_WAIT, &install_status, &entry));
 
@@ -619,8 +646,9 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
 // it INTO ANOTHER PIPE (DOCA_FLOW_FWD_PIPE) -- the head of the marking chain. That is the whole
 // difference between a forwarder and a pipeline.
 //
-// Unused in this file, which is the finished program: build_pipeline() below calls create_root_pipe
-// instead, and the call to this one is left commented out where the template has it live.
+// build_pipeline() below calls exactly one of the two roots: this one in the exercise as shipped,
+// and create_root_pipe() once Part D.1 is done. __attribute__((unused)) is there because whichever
+// of those two states you are in leaves the other function uncalled, and -Wall would say so.
 static void __attribute__((unused)) create_root_pipe_nop(struct doca_flow_port *port) {
   struct doca_flow_pipe_cfg *cfg;
 
@@ -637,13 +665,16 @@ static void __attribute__((unused)) create_root_pipe_nop(struct doca_flow_port *
   // A full mask on the ingress port: it is compared exactly, and each entry supplies the port it
   // matches.
   struct doca_flow_match match = {0}, match_mask = {0};
-  match.parser_meta.port_meta = UINT32_MAX;
-  match_mask.parser_meta.port_meta = UINT32_MAX;
+  struct doca_flow_fwd fwd_hit = {0};
+  struct doca_flow_fwd fwd_miss = {0};
+  struct doca_flow_pipe *pipe = NULL;
+
+  match.parser_meta.port_meta = 0xFFFFFFFF;
+  match_mask.parser_meta.port_meta = 0xFFFFFFFF;
   DOCA_CHECK("PORT_DEMUX_NOP", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
 
-  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_CHANGEABLE};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_DROP};
-  struct doca_flow_pipe *pipe;
+  fwd_hit.type = DOCA_FLOW_FWD_CHANGEABLE;
+  fwd_miss.type = DOCA_FLOW_FWD_DROP;
   DOCA_CHECK("PORT_DEMUX_NOP", doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
 
   doca_flow_pipe_cfg_destroy(cfg);
@@ -711,13 +742,16 @@ static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe 
   // A full mask on the ingress port: it is compared exactly, and each entry supplies the port it
   // matches.
   struct doca_flow_match match = {0}, match_mask = {0};
-  match.parser_meta.port_meta = UINT32_MAX;
-  match_mask.parser_meta.port_meta = UINT32_MAX;
+  struct doca_flow_fwd fwd_hit = {0};
+  struct doca_flow_fwd fwd_miss = {0};
+  struct doca_flow_pipe *pipe = NULL;
+
+  match.parser_meta.port_meta = 0xFFFFFFFF;
+  match_mask.parser_meta.port_meta = 0xFFFFFFFF;
   DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
 
-  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_CHANGEABLE};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_DROP};
-  struct doca_flow_pipe *pipe;
+  fwd_hit.type = DOCA_FLOW_FWD_CHANGEABLE;
+  fwd_miss.type = DOCA_FLOW_FWD_DROP;
   DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
 
   doca_flow_pipe_cfg_destroy(cfg);
@@ -773,13 +807,11 @@ static void build_pipeline(struct doca_flow_port *port, const struct app_config 
   // forwarder on its own, and the pipes below then put themselves in front of it.
   struct doca_flow_pipe *wire_target = create_passthrough_pipe(port);
 
-  // PASS forwards and counts; MARK also rewrites the ECN bits to CE. wire_target is still
-  // PASSTHROUGH at this point, so it is what both of them fall back to on a miss.
-  struct doca_flow_pipe *pass =
-      create_forward_to_sf_pipe(port, false, wire_target, &out->pass_entry);
+  // PASS forwards and counts; MARK also rewrites the ECN bits to CE. Both send everything to the
+  // SF either way -- the match only decides what is counted and marked.
+  struct doca_flow_pipe *pass = create_forward_to_sf_pipe(port, false, &out->pass_entry);
   struct doca_flow_pipe *mark = NULL;
-  if (cfg->random_percent > 0.0)
-    mark = create_forward_to_sf_pipe(port, true, wire_target, &out->ce_entry);
+  if (cfg->random_percent > 0.0) mark = create_forward_to_sf_pipe(port, true, &out->ce_entry);
 
   // Where wire traffic actually enters, per --percent.
   if (cfg->random_percent >= 100.0)

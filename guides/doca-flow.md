@@ -56,7 +56,9 @@ title: "Part 1 — Programming the data plane with DOCA Flow"
 
   FORM CHOICES, kept on purpose:
     PYTHON PSEUDO-CODE for main(), because the reader is navigating, not typing.
-    A REAL C BLOCK for build_pipeline(), because they edit exactly that text.
+    PROSE ONLY for build_pipeline(): it used to be pasted here as a C block, which meant
+    re-syncing the guide by hand every time regen_templates.py changed it, and it went stale
+    twice. The file itself is the copy that matters -- describe it here, do not duplicate it.
     A TABLE for the six pipeline functions, marking given vs TODO.
     AN ENUMERATED LIST for the five-part pipe shape (end of Part B) -- deliberately not a code
     block: the logical components are the API calls, and the structs are merely their arguments.
@@ -94,11 +96,15 @@ title: "Part 1 — Programming the data plane with DOCA Flow"
      mlx5_1 with dozens of mostly-DOWN ports.
      Every command block in Part A's device section was then re-run VERBATIM on all twelve and the
      output checked against it. The two `rdma link show` lines are byte-identical on 12/12.
-     The blocks are ANNOTATED and lightly TRIMMED on purpose, so they are not literal pastes:
-     trailing `# ...` comments explain each line, the column padding is ours, and the fe80::
-     link-local that `ip -br addr show` really prints is cut as noise. The p0/p1 MACs are one
-     card's and are flagged as such. Keep it that way -- readable beats verbatim here -- but do
-     not let the SUBSTANCE drift from what the cards print.
+     The blocks are ANNOTATED on purpose, so they are not literal pastes: the trailing `# ...`
+     comments explain each line and the column padding is ours. The p0/p1 MACs are one card's and
+     are flagged as such. Keep it that way -- readable beats verbatim here -- but do not let the
+     SUBSTANCE drift from what the cards print.
+     An `ip -br addr show` block showing the SF netdevs and their 10.0.0.x addresses was cut: the
+     netdev names enp3s0f0s0 / enp3s0f1s0 are never typed into anything in this tutorial (every
+     command names mlx5_2/mlx5_3, ns0/ns1, or 10.0.0.1), and the endpoint table at the top of
+     Part A already carries the addresses. They survive only in the `rdma link show` netdev column
+     and in Appendix A's function table.
      Uniform across the fleet: p0, p1, pf0hpf, pf1hpf, en3f0pf0sf0, en3f1pf1sf0, ovsbr1, ovsbr2,
      ovs-system, oob_net0, tmfifo_net0, tailscale0 on 12/12; en3f0pf0sf4 (ns0_1, 10.0.0.11) on
      11/12 -- not bf3-umich-2; docker0 on 2/12. Inside ns0/ns1 every card is identical.
@@ -173,11 +179,6 @@ In this tutorial, we will be using two endpoints composed of
 lightweight virtual NICs called **SFs** (sub-functions), one per port, each in its own network
 namespace so the kernel cannot short-circuit them locally:
 
-| Endpoint     | RDMA device | Namespace | IP         | Role                       |
-| ------------ | ----------- | --------- | ---------- | -------------------------- |
-| SF on port 0 | `mlx5_2`    | `ns0`     | `10.0.0.1` | **RoCE server** (receives) |
-| SF on port 1 | `mlx5_3`    | `ns1`     | `10.0.0.2` | **RoCE client** (sends)    |
-
 > **INFO — what is a sub-function?** A **sub-function (SF)** is a lightweight virtual NIC carved out
 > of a physical port. It shows up as its own network device. We create one SF on each side and use
 > the two of them as the *endpoints* of a network flow — so a single card can play both "sender" and
@@ -195,21 +196,12 @@ by configuring the Bluefield to mark the ECN bits on the packets.
 As such, we split this tutorial into two parts:
 
 - **Part 1, this guide.** Program the NIC to set the ECN "congestion experienced" (CE) mark on a
-  fraction of the client's packets going through the NIC — you choose the fraction. Everything happens in hardware;
-  your program only installs the rules, then sits idle printing counters.
+  fraction of the client's packets going through the NIC — you choose the fraction. Everything happens
+  in hardware; your program only installs the rules, then sits idle printing counters.
 - **Part 2.** Program the Bluefield's DPA to *react*: the server's NIC answers a CE-marked packet with a
   congestion notification, and your algorithm turns each one into a lower send rate for the client.
 
 ![You write the marking in Part 1 and the reaction in Part 2. The client, the server, and the CNP the receiver's NIC sends back are already there.](../docs/tutorial-logical-setup.png)
-
-**Where things are.** The repository has one directory per DOCA release:
-
-```
-doca-2/doca-flow/doca_flow_ecn.c    <- the file you edit
-scripts/                            <- traffic generators
-```
-
-Every command in this guide is run from the top of the repository, so nothing below needs a `cd`.
 
 **The network devices of the physical ports.** The two physical ports are visible as soon as you log in:
 
@@ -219,31 +211,12 @@ p0            UP    f0:fb:7f:e2:e2:76 <BROADCAST,MULTICAST,UP,LOWER_UP>
 p1            UP    f0:fb:7f:e2:e2:77 <BROADCAST,MULTICAST,UP,LOWER_UP>
 ```
 
-(Those MAC addresses are your card's own, so yours will read differently.)
+These MAC addresses are specific to whichever card you are using, so yours might read differently.
 
-**The RoCE endpoints.** The RoCE endpoints live inside the `ns0` and `ns1` namespaces, so you have to look
-from within each namespace — the server's SF first, then the client's:
-
-```bash
-$ sudo ip netns exec ns0 ip -br addr show enp3s0f0s0
-enp3s0f0s0    UP    10.0.0.1/24     # the server's SF, on the p0 side
-$ sudo ip netns exec ns1 ip -br addr show enp3s0f1s0
-enp3s0f1s0    UP    10.0.0.2/24     # the client's SF, on the p1 side
-```
-
-Those two addresses are the same on every card in the room.
-
-> **Don't worry about everything else `ip -br link show` prints.** The full listing has a
-> dozen more interfaces on every card: `pf0hpf` and `pf1hpf` (the host's view of each port),
-> `en3f0pf0sf0` and `en3f1pf1sf0` (the *switch* side of the two SFs above — this is what your
-> pipeline forwards to), `ovsbr1`, `ovsbr2` and `ovs-system` (the card's default forwarding),
-> `oob_net0`, `tmfifo_net0` and `tailscale0` (management), and so on. Which of these you see
-> varies from card to card; none of them changes anything you do here.
-
-The traffic we will watch is **RoCE** (RDMA over Converged Ethernet), the high-speed, kernel-bypass
-transport used in AI and storage networks. RoCE doesn't use normal sockets. Instead, programs reach
-it through **RDMA devices** named `mlx5_N`. Each SF has one, and — like the netdev — it is only
-visible from inside that SF's namespace:
+**The RoCE endpoints.** In this tutorial, we will work with **RoCE** (RDMA over Converged Ethernet)
+traffic, the high-speed, kernel-bypass transport used in AI and storage networks. RoCE doesn't use
+normal sockets. Instead, programs reach it through **RDMA devices** named `mlx5_{N}`. Each SF has one,
+and it is only visible from inside that SF's namespace:
 
 ```bash
 $ sudo ip netns exec ns0 rdma link show
@@ -252,21 +225,21 @@ $ sudo ip netns exec ns1 rdma link show
 link mlx5_3/1 state ACTIVE physical_state LINK_UP netdev enp3s0f1s0   # the client's SF
 ```
 
-One line each, and identical on every card in the room.
-
 > **Run `rdma link show` outside a namespace and none of that appears.** You get `mlx5_0` and
 > `mlx5_1` — the two physical ports — each listing dozens of ports, most of them `DOWN`. That is
 > the switch's own view, not the endpoints'. `mlx5_2` and `mlx5_3` are the names you want, and
 > `ip netns exec` is what makes them visible.
 
-**`mlx5_2` and `mlx5_3` are the two SF endpoints** we send RoCE between.
-`mlx5_0`/`mlx5_1` are the physical ports themselves.
-
 **Step 1: wire up the two endpoints**.
 The two ports are wired into a loopback and split into two isolated network sandboxes (Linux
-network namespaces) called `ns0` and `ns1` — one SF in each, each with its own IP address
+network namespaces) called `ns0` and `ns1`, one SF in each, each with its own IP address
 (`mlx5_2` → `ns0` → `10.0.0.1`, `mlx5_3` → `ns1` → `10.0.0.2`). This is already set up for you on
-the tutorial card, so there's nothing to run here.
+the tutorial card, so *there's nothing to run here*.
+
+| Endpoint     | RDMA device | Namespace | IP         | Role                       |
+| ------------ | ----------- | --------- | ---------- | -------------------------- |
+| SF on port 0 | `mlx5_2`    | `ns0`     | `10.0.0.1` | **RoCE server** (receives) |
+| SF on port 1 | `mlx5_3`    | `ns1`     | `10.0.0.2` | **RoCE client** (sends)    |
 
 > **INFO — what is a network namespace?** It is a private, isolated network stack inside one Linux
 > machine — its own interfaces, IPs, and routes. Putting each SF in its own namespace (`ns0`, `ns1`)
@@ -286,41 +259,52 @@ Open **two terminals**, both on the Arm cores.
 ```bash
 sudo ip netns exec ns0 ib_write_bw -d mlx5_2 -R -x 1 -F --report_gbits
 ```
-What the flags mean: `ip netns exec ns0` runs it inside the `ns0` sandbox; `-d mlx5_2` uses that
-namespace's RDMA device; `-R` sets the connection up via the RDMA connection manager (keep this on —
-Part II needs it); `-x 1` picks the RoCEv2 address; `-F` ignores a CPU-frequency warning;
-`--report_gbits` prints the result in gigabits/second. It prints its settings and then says it is
-**waiting for a client**.
+
+<!-- FIXME: I don't quite understand the explanation for -R and -x. [-R] what does it mean to set a connection up via the RDMA connection manager?; [-x] what RoCEv2 address? what would happen if we didn't provide -x? And why is the -x argument followed by "1"? -->
+> **INFO - what the flags mean:** `ip netns exec ns0` runs it inside the `ns0` sandbox; `-d mlx5_2` uses that
+> namespace's RDMA device; `-R` sets the connection up via the RDMA connection manager (keep this on —
+> Part II needs it); `-x 1` picks the RoCEv2 address; `-F` ignores a CPU-frequency warning;
+> `--report_gbits` prints the result in gigabits/second. It prints its settings and then says it is
+> **waiting for a client**.
 
 **Terminal 2 — the sender (client).** Point it at the server's IP, `10.0.0.1`:
 ```bash
 sudo ip netns exec ns1 ib_write_bw -d mlx5_3 -R -x 1 -F 10.0.0.1 --report_gbits
 ```
 
-**You should see** a results table appear on both terminals, with the throughput climbing toward the
-card's line rate:
+**You should see** a results table appear on both terminals, with the throughput closely matching
+the card's line rate:
 ```
  #bytes     #iterations   BW peak[Gb/sec]   BW average[Gb/sec]   MsgRate[Mpps]
  65536      529037          0.00              92.46                0.176344
 ```
-That ~92 Gb/s is your proof the whole path works end to end: sender → `p1` → cable → `p0` → the
-eSwitch → receiver. If you see a table with a real number, Part A is done.
+To avoid retyping the flags, the repo wraps these as scripts: `./scripts/run_server.sh` and
+`./scripts/run_client.sh` (one per terminal), or **`./scripts/benchmark.sh`**, which starts both
+ends together in a single command and streams the sender's throughput (Ctrl-C stops both). We
+recommend using `benchmark.sh` from Part C onwards.
 
-> To avoid retyping the flags, the repo wraps these as scripts: `./scripts/run_server.sh` and
-> `./scripts/run_client.sh` (one per terminal), or **`./scripts/benchmark.sh`**, which starts both
-> ends together in a single command and streams the sender's throughput (Ctrl-C stops both). We use
-> `benchmark.sh` from Part C on.
+# Part B — Understanding DOCA Flow
 
-# Part B — DOCA Flow in one page
+Interacting with a BlueField-3 typically entails interfacing with — and often independently
+programming — four different architectural components:
 
-DOCA Flow is how you program that switch from C. Your program builds a small graph of **pipes**, and
-each pipe answers four questions:
+| Where                  | What it is                               | Used for                     |
+| ---------------------- | ---------------------------------------- | ---------------------------- |
+| **Host x86**           | The server the card is plugged into      | Not used here                |
+| **Arm cores**          | General purpose cores on the card        | Where you'll be working      |
+| **NIC ASIC / eSwitch** | The match-action pipeline inside the NIC | Packet modification (Part 1) |
+| **DPA**                | RISC-V engine on the data path           | Congestion control (Part 2)  |
+
+
+DOCA Flow is the NVIDIA library that allows you to program the Bluefield's eSwitch, allowing
+you to make packet modifications on the fly as they traverse the NIC's ASIC.
+Your DOCA Flow program builds a small graph of **pipes**, and each pipe answers four questions:
 
 | Part        | The question it answers                | Example                                |
 | ----------- | -------------------------------------- | -------------------------------------- |
-| **match**   | *which* packets does this pipe act on? | "all IPv4 packets"                     |
+| **match**   | *which* packets does this pipe act on? | all IPv4 packets                       |
 | **monitor** | *how many* packets hit it?             | a hardware counter you can read        |
-| **actions** | *what* do we change in the packet?     | rewrite a header field, or nothing     |
+| **actions** | *what* do we change in the packet?     | modify the destination IP address      |
 | **forward** | *where* does the packet go next?       | another pipe, a port, the CPU, or drop |
 
 You describe these rules once, at startup. The NIC then applies them to every packet in hardware,
@@ -329,67 +313,48 @@ forward.**
 
 ![Pipes chain into a graph. Within a pipe, each entry is a Match, a monitor (MON), a modify/action stage (MDF) and a forward (FWD). Source: [NVIDIA DOCA Flow programming guide](https://networking-docs.nvidia.com/doca/archive/3-4-0/doca-flow), "Architecture".](images/nvidia-doca-flow-pipes.png){ width=82% }
 
-Two things about pipes are worth getting straight before you write any, because both are easy to get
-backwards:
+Two details about pipes are worth getting straight before you write any:
 
-> **Pipe = which fields. Entry = what values.** A pipe is a *template*: writing `0xFF` into a field
-> of its match means "this field participates", and `0x00` in the mask means "…but do not actually
-> compare it". The **entry** you add afterwards supplies the value really compared. Creating a pipe
-> installs no rule in the hardware; adding an entry does. The same split applies to actions — the
-> pipe declares "entries may rewrite this field", the entry says "…to this value".
+- **Pipe = which fields. Entry = what values.** A pipe is a *template*: writing `0xFF` into a field
+of its match means "this field participates", and `0x00` in the mask means "…but do not actually
+compare it". The **entry** you add afterwards supplies the value really compared. Creating a pipe
+installs no rule in the hardware; adding an entry does. The same split applies to actions — the
+pipe declares "entries may rewrite this field", the entry says "…to this value".
 
-> **One pipe is the root.** Every packet entering the switch starts its lookup at the pipe marked
-> `is_root`, and that is the only way into the rest of the graph. However correct your other pipes
-> are, nothing reaches them unless the root sends it there. The program you are given ships with a
-> root pipe that goes straight to the server; the exercise is to put your own pipeline in between.
-
-**You start from two worked examples.** In `doca_flow_ecn.c`, `create_passthrough_pipe()` is a
-complete, minimal pipe, and `create_root_pipe_nop()` is the root pipe the program ships with — the
-one that makes it forward traffic before you have written anything. Neither needs changing, and
-between them they use every call you need. Read the first one before you write a line, because
-**every** pipe in the file, including all three of yours, has the same five-part shape:
-
-1. **Create a pipe configuration** with `doca_flow_pipe_cfg_create()`, against the port it belongs to.
-   What comes back is a builder, not a pipe.
-2. **Describe it**, with one setter per property: `..._set_name()`, `..._set_type()`,
-   `..._set_domain()`, `..._set_is_root()` and `..._set_nr_entries()`, plus `..._set_match()` for the
-   match template — and `..._set_actions()` and `..._set_monitor()` when the pipe rewrites or counts.
-   `..._set_match()` takes two `doca_flow_match` structs: the first says which fields participate,
-   the second masks them.
-3. **Create the pipe** with `doca_flow_pipe_create()`, passing two `doca_flow_fwd` structs — where a
-   hit goes, and where a miss goes. Then discard the builder with `doca_flow_pipe_cfg_destroy()`;
-   the pipe keeps no reference to it.
-4. **Add the entries** with `doca_flow_pipe_add_entry()`, once each. This is the call that actually
-   installs a rule — the pipe on its own does nothing.
-5. **Install and check** with `doca_flow_entries_process()`, then confirm that every entry landed.
-
-Step 5 is not optional. `doca_flow_pipe_add_entry()` returns as soon as the driver has taken the
-rule; the hardware's verdict arrives later, through a callback. A pipe that exists but installed
-nothing forwards nothing, silently — the hardest failure here to spot from the outside.
+<!-- FIXME: do we actually ship the template with a root pipe that forwards packets to the server, and the exercise is to put our own pipeline in between? I thought we shipped a NOP pipe, that is, just forwards the packets (not particularly to the server, but actually both ways). Also, are they supposed to write their pipeline in between? I thought they were supposed to replace this with their own. -->
+- **One pipe is the root.** Every packet entering the eSwitch starts its lookup at the pipe marked
+`is_root`. No packet reaches other pipes unless the root sends it there. The program you are given
+ships with a root pipe that forwards packets to the server; the exercise is to put your own pipeline in between.
 
 # Part C — Build the pipeline
 
-Everything in `doca-2/doca-flow/doca_flow_ecn.c` is written except three function bodies, marked
-`TODO 1` to `TODO 3`. As shipped the program already forwards traffic — that is where Part D starts.
+The repository (`/home/s26t/sigcomm26-tutorial-bluefield-participants`) has one directory per DOCA release:
+`doca-2` and `doca-3`. Pick the relevant one for your chosen Bluefield. In this part of the tutorial, you
+will be editting the `doca-flow/doca_flow_ecn.c` file.
 
-Laid out logically it is three phases, and only the middle one is yours. Python below is
-pseudo-code, used to show the logical components of the C file we give you:
+Everything in `doca-2/doca-flow/doca_flow_ecn.c` is done except for three function bodies, marked
+`TODO 1` to `TODO 3`. The shipped the program already forwards traffic.
+
+Laid out logically, the `doca_flow_ecn.c` file is logically separated into four different phases.
+We use python-like pseudo-code to show you these logical components:
 
 ```python
-def main():
+def doca_flow_ecn_main():
+    # Phase 1: setting up logging and argument parsing
     setup_logging()
     parse_args()                        # --percent
 
-    # ---- bring-up: device and library. None of this is pipeline work ----
+    # Phase 2: bring-up the device and library. None of this is pipeline work
     dev = open_and_probe_dev(0)         # PF0, probed into DPDK with its SF representor
     configure_and_start_dpdk_port(dev)  # packet buffer pool, RX/TX queues
     initialize_doca_flow()              # switch mode, hardware steering, counters
     port = port_start(dev)              # the PF0 proxy port -- must be started first
     sf = rep_port_start(...)            # the server SF's representor
 
-    build_pipeline(port, cfg, out)      # <-- ALL of your work is reached from here
+    # Phase 3: actually program the DOCA Flow pipeline
+    build_pipeline(port, cfg, out)      # <-- **all** of your work will be here
 
-    # ---- runtime ----
+    # Phase 4: runtime logic (just reporting) and teardwown
     run_report_loop()                   # print the counters, once a second
     teardown()
 ```
@@ -399,109 +364,113 @@ functions at the bottom of the file:
 
 | Function                      |            | What it does                                      |
 | ----------------------------- | ---------- | ------------------------------------------------- |
+| `build_pipeline()`            | given      | Calls the pipe creation functions                 |
 | `create_passthrough_pipe()`   | given      | Forward IPv4 to the server, unchanged             |
 | `create_root_pipe_nop()`      | given      | The root pipe as shipped: wire to server and back |
 | `create_root_pipe()`          | **TODO 1** | Yours — the same, but into your chain             |
 | `create_forward_to_sf_pipe()` | **TODO 2** | Forward, count, and set the CE mark when asked    |
 | `create_sampling_pipe()`      | **TODO 3** | Send 1 packet in N down the marking path          |
-| `build_pipeline()`            | given      | Wires them together — you edit comments here      |
 
 `build_pipeline()` is the one to read closely: it is the whole exercise in a single function, and
-it ships wired as a plain forwarder.
+it ships wired as a plain forwarder. In this function, note what `wire_target` does: it starts out
+as `PASSTHROUGH` — a working forwarder on its own, and all D.1 needs — and is then reassigned to
+whichever pipe wire traffic should really enter as you add the pipes in front of it.
 
-```c
-static void build_pipeline(struct doca_flow_port *port, const struct app_config *cfg,
-                           struct pipeline *out) {
-  // ---------------- NO-OP CONFIGURATION: comment out this line in Exercise 1. ------------------
-  create_root_pipe_nop(port);
+# Part D — The actual tutorial exercise
 
-  // ---------------- YOUR PIPELINE ---------------------------------------------------------------
-  // Exercise 1: uncomment the two lines marked [1].
-  // Exercises 2 and 3: uncomment the rest of the block as well.
-  //
-  // [1] struct doca_flow_pipe *wire_target = create_passthrough_pipe(port);
-  //
-  //     // PASS forwards and counts; MARK also rewrites the ECN bits to CE. wire_target is still
-  //     // PASSTHROUGH at this point, so it is what both of them fall back to on a miss.
-  //     struct doca_flow_pipe *pass =
-  //         create_forward_to_sf_pipe(port, false, wire_target, &out->pass_entry);
-  //     struct doca_flow_pipe *mark = NULL;
-  //     if (cfg->random_percent > 0.0)
-  //       mark = create_forward_to_sf_pipe(port, true, wire_target, &out->ce_entry);
-  //
-  //     // Where wire traffic actually enters, per --percent.
-  //     if (cfg->random_percent >= 100.0)
-  //       // mark everything
-  //       wire_target = mark;
-  //     else if (cfg->random_percent <= 0.0)
-  //       // mark nothing
-  //       wire_target = pass;
-  //     else {
-  //       out->sample_mask = get_random_mask(cfg->random_percent);
-  //       wire_target = create_sampling_pipe(port, mark, pass, out->sample_mask);
-  //     }
-  //
-  // [1] create_root_pipe(port, wire_target);
-}
-```
-
-Note what `wire_target` does: it starts out as `PASSTHROUGH` — a working forwarder on its own — so
-the marking pipes can use it as their miss target, and is then reassigned to whichever pipe wire
-traffic should really enter.
-
-# Part D — Tutorial exercise
-
-Three exercises. Each is one function, and each ends with something you can see.
-
-Build and run, from the top of the repository, is the same every time:
+We use `meson` and `ninja` to setup and build our applications. You only need to setup once, but
+you do need to recompile with `ninja` everytime you make changes to your program. Remember,
+replace `doca-2` with `doca-3` if you are using a Bluefield equipped with DOCA version 3.x.
 
 ```bash
-$ meson setup doca-2/build doca-2      # first time only
+# Setting up the build directory (only once)
+$ meson setup doca-2/build doca-2
+
+# Compile the application
 $ ninja -C doca-2/build
+
+# Run the doca flow application
 $ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 100
 ```
-
-Keep `./scripts/benchmark.sh` running in a second shell throughout — it starts the server and the
-client together and streams the sender's throughput, so you can see the effect of every change.
 
 > **The `--` matters.** Everything before it goes to the DPDK library; everything after it is for
 > this program. `--percent N` is the only flag it takes: CE-mark this share of packets, `[0, 100]`,
 > default 100.
+
+Keep `./scripts/benchmark.sh` running in a second shell throughout — it starts the server and the
+client together and streams the sender's throughput, so you can see the effect of every change.
+
+**Figure 3 shows the DOCE Flow pipeline you will build.** Each blue pipe is one function, written in the section
+it is labelled with. Not drawn: `PORT_DEMUX`'s second entry, sending everything coming back from
+the server straight out to the wire; and `PASSTHROUGH`, the worked example, which D.1 aims the root
+at but which nothing reaches once `MARK` and `PASS` exist. `RANDOM_SAMPLE` is built only when
+`--percent` is strictly between 0 and 100; at either extreme the wire feeds `MARK` or `PASS`.
+
+![The Part D pipeline. Solid arrows are where a packet goes when it matches, dashed ones where it goes when it does not.](../docs/tutorial-flow-pipeline.png){ width=92% }
 
 ## D.1 — Write the root pipe
 
 **First, run it exactly as it comes.** Traffic should sit at line rate — 92 or 184 Gb/s depending on
 the card — and the counter line should stay at zero:
 
-```
-CE marked: 0, passthrough: 0 (0% marked)
+```bash
+s26t@bluefield-lisbon-1:~/sigcomm26-tutorial-bluefield-participants$ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 100
+EAL: Detected CPU lcores: 16
+EAL: Detected NUMA nodes: 1
+EAL: Detected shared linkage of DPDK
+EAL: Multi-process socket /var/run/dpdk/rte/mp_socket
+EAL: Selected IOVA mode 'VA'
+TELEMETRY: No legacy callbacks, legacy socket not created
+EAL: Probe PCI driver: mlx5_pci (15b3:a2dc) device: 0000:03:00.0 (socket -1)
+[21:03:01:006330][2652007][DOCA][INF][doca_flow_ecn.c:205][configure_and_start_dpdk_port] mbuf data room 9344 bytes (jumbo-capable, max frame 9216)
+[21:03:01:962242][2652007][DOCA][WRN][engine_model.c:92][adapt_queue_depth] adapting queue depth to 128.
+[21:03:02:988380][2652007][DOCA][INF][doca_flow_ecn.c:640][create_root_pipe_nop] No-op forwarder ready: wire <-> receiver SF, nothing marked
+[21:03:02:988416][2652007][DOCA][INF][doca_flow_ecn.c:375][log_startup] Marking ALL IPv4 -- Ctrl-C to stop
+[21:03:03:003181][2652007][DOCA][INF][doca_flow_ecn.c:393][run_report_loop] CE marked: 0, passthrough: 0 (0% marked)
+[21:03:04:003060][2652007][DOCA][INF][doca_flow_ecn.c:393][run_report_loop] CE marked: 0, passthrough: 0 (0% marked)
 ```
 
 That is `create_root_pipe_nop()` doing its job: one root pipe, wire traffic straight to the server,
 whatever comes back straight out to the wire, nothing marked and nothing counted.
 
-**Now stop it with Ctrl-C, leaving the traffic running.** Throughput carries on unchanged — the card
-falls back to its default OVS forwarding. Start the program again and it takes over.
+**Now stop it with Ctrl-C, leaving the traffic running.** Throughput carries on unchanged, asside from
+a small dip in throughput as the card falls back to its default OVS forwarding. Start the program again
+and it takes over (notice again the small temporary dip in throughput).
 
-> **Why this matters.** The instant a DOCA Flow program starts it **owns the NIC's switch**, and from
+> **Why this matters.** The instant a DOCA Flow program starts, it **owns the NIC's switch**, and from
 > then on the NIC forwards only what your pipes say to forward. `create_root_pipe_nop()` is what
 > keeps traffic moving. Take it away with nothing in its place and everything stops: an empty
 > pipeline does not mean "pass traffic through", it means "drop everything".
 
-**Now write your own root pipe.** In `build_pipeline()`, comment out the call to the no-op root
-pipe, and uncomment the two lines marked `[1]`. Then fill in `create_root_pipe()` — its two gaps
-are `TODO 1a` and `TODO 1b`. Every struct you need is already declared; what is missing is the DOCA
-calls.
+**Now start writing your own root pipe.** In `build_pipeline()`, comment out the call to the no-op root
+pipe (`create_root_pipe_nop`), and uncomment the two lines tagged `// [1]`. Let's now fill in `create_root_pipe()`
+— its two gaps are `TODO 1a` and `TODO 1b`.
 
-Start from `create_root_pipe_nop()` directly above it, because you are writing almost the same
-pipe:
+Every pipe is built the same way, in two layers:
 
-- **Match** on the ingress port, `parser_meta`, with a full mask so it is compared exactly. This is
+- **The pipe is a template.** When you create a pipe you describe its *shape* — which header fields
+  it matches on, which fields its actions may rewrite, and where a match forwards — but **not** the
+  concrete values. You mark a field with `0xFF` to mean "this field participates," without yet saying
+  *what* to look for. The call that compiles that shape into the hardware is `doca_flow_pipe_create()`.
+- **Entries fill in the values.** A freshly created pipe does nothing until you add at least one
+  **entry**, and each entry supplies the concrete values for the fields the pipe declared — "match
+  IPv4 packets *with this DSCP/ECN byte*," "rewrite the ECN bits *to this value*." One pipe can carry
+  many entries (a root pipe, for instance, has one per direction). You add an entry with
+  `doca_flow_pipe_add_entry()`, then install it in the NIC with `doca_flow_entries_process()`.
+
+So the one idiom behind every pipe: **the pipe says *which* fields, the entry says *what* values** —
+and the same split applies to actions (the pipe declares "entries may rewrite this field," the entry
+supplies the value to write).
+
+You are not writing from a blank page. Take heavy inspirations from `create_root_pipe_nop()` directly
+above `create_root_pipe()`, because you are writing almost the same pipe:
+
+- **(TODO 1a) Match** on the ingress port, `match.parser_meta`, with a full mask so it is compared exactly. This is
   the field that says which side a packet came from.
-- **Forwards**: `DOCA_FLOW_FWD_CHANGEABLE` for a hit — meaning "each entry brings its own
+- **(TODO 1a) Forwards**: `DOCA_FLOW_FWD_CHANGEABLE` for a hit — meaning "each entry brings its own
   destination" — and `DOCA_FLOW_FWD_DROP` for a miss.
-- **Two entries.** From the wire (`PF_PORT_ID`) to `wire_target`, and from the server's SF
-  (`SF_REP_PORT_ID`) out of `PF_PORT_ID`. Install the first with `WAIT_FOR_BATCH` and the second
+- **(TODO 1b) Two entries.** From the wire (`PF_PORT_ID`) to `wire_target`, and from the server's SF
+  (`SF_REP_PORT_ID`) out to `PF_PORT_ID`. Install the first with `WAIT_FOR_BATCH` and the second
   with `NO_WAIT`, so both reach the hardware together.
 
 **The only real difference from the no-op** is that first entry: the no-op forwards wire traffic to a
@@ -509,9 +478,9 @@ pipe:
 `next_pipe = wire_target`). That is the whole distinction between a forwarder and a pipeline, and it
 is what lets you insert anything at all into the path.
 
-> Keeping the two directions apart is not cosmetic. The return path carries the RoCE
-> acknowledgements and the congestion notifications the Part 2 controller reacts to; marking those
-> would corrupt the very feedback you are trying to create.
+Keeping the two directions apart is not cosmetic. The return path carries the RoCE
+acknowledgements and the congestion notifications the Part 2 controller reacts to; marking those
+would corrupt the very feedback you are trying to create.
 
 Rebuild and run. Traffic should be back at line rate, now through your pipe rather than the shipped
 one, with the counters still at zero — `wire_target` is `PASSTHROUGH`, which counts nothing.
@@ -519,8 +488,15 @@ one, with the counters still at zero — `wire_target` is `PASSTHROUGH`, which c
 ## D.2 — Mark every packet
 
 Uncomment the rest of the block in `build_pipeline()`, then fill in `create_forward_to_sf_pipe()` —
-`TODO 2a` and `TODO 2b`. It is called **twice**, once with `mark` false and once true, so everything
-mark-specific goes behind `if (mark)`.
+`TODO 2a` and `TODO 2b`.
+
+<!-- FIXME: double check that this is factually correct. -->
+**This one function builds both of the forwarding pipes.** `build_pipeline()` calls it **twice**:
+once to build a pipe that does *not* mark the packets' ECN bits, and another to build a pipe that
+does mark them.
+Everything the two have in common — the match, the counter, the forwards — you write unconditionally.
+The two steps that are specific to the marking pipe are the action template in `TODO 2a` and the value
+the entry writes in `TODO 2b`.
 
 Start from `create_passthrough_pipe()`: this is the same pipe with a counter and an action added.
 
@@ -532,7 +508,8 @@ Start from `create_passthrough_pipe()`: this is the same pipe with a counter and
 - **The marking action**, when `mark` is true: declare `outer.ip4.dscp_ecn` as `0xFF` in a
   pipe-level action template, and have the entry write the value. RFC 3168 gives the two-bit ECN
   field as `Not-ECT 00`, `ECT(1) 01`, `ECT(0) 10`, `CE 11`, so the byte you want is `0x03`.
-- **Forwards**: hits to the server's SF, misses to `miss_pipe`.
+- **Forwards**: hits *and* misses both to the server's SF. Nothing is dropped here — the match only
+  decides what gets counted and marked, so non-IPv4 goes on untouched.
 - Hand the installed entry back through `out_entry` — that is what the counter report queries.
 
 Rebuild and run with `--percent 100`. Traffic should be at line rate, and now the counter climbs:
