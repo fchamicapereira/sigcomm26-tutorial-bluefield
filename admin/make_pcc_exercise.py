@@ -4,8 +4,8 @@
 The exercise (device/algo/rtt_template_exercise.c) is algo/rtt_template.c with exactly two things
 removed -- the CNP multiplicative decrease and the TX additive increase -- each replaced by a TODO
 block, plus a rewritten header. It builds and runs as shipped but does no rate control until a
-participant fills the two TODOs. sync_participants.py ships it (renamed rtt_template.c) as the
-participant exercise, with the finished controller as the solution.
+participant fills the two TODOs. update_participants_repo_on_github.py ships it, renamed to
+rtt_template.c, as the participant exercise.
 
 This tool encodes that transform so every version's exercise is produced the same way, and so the
 exercise can be regenerated after the controller changes. The substitutions below must each match

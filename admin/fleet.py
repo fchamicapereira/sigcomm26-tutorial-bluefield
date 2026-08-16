@@ -15,6 +15,7 @@ Standard library only, on purpose: clone the repo and run it, no venv, no pip.
     ./admin/fleet.py sync                     # every machine in the inventory
     ./admin/fleet.py sync bf3-ulisbon-1       # just these
     ./admin/fleet.py sync --force             # discard local modifications on the targets
+    ./admin/fleet.py sync-participants        # install the participant repo, minus its .git
     ./admin/fleet.py doca                     # which DOCA version is each machine running
     ./admin/fleet.py firmware                 # which NIC firmware is each machine running
     ./admin/fleet.py deps                     # what is each machine missing to build the exercises
@@ -50,6 +51,19 @@ SCRIPTS_DIR = ADMIN_DIR / "local_scripts"
 REPO_URL = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield.git"
 BRANCH = "main"
 TUTORIAL_USER = "s26t"
+
+# What the participants actually work in: the cut-down tree that
+# admin/update_participants_repo_on_github.py generates and pushes. Separate repo, separate verb
+# (sync-participants), and installed differently -- as a plain directory with .git deleted, because
+# its history holds every earlier state of the exercise. Same HTTPS reasoning as above.
+PARTICIPANTS_REPO_URL = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants.git"
+
+# Where sync_participants.sh puts it, repeated here only so the --force warning can name the exact
+# directory it is about to delete -- spelled as a real path, because someone reading that warning
+# may well want to go and look at it before answering. Derived the same way the script does
+# (/home/$TUSER/<repo basename>); the script computes its own and remains the authority, so if the
+# two ever disagree the cost is a misleading warning, not a wrong path on a machine.
+PARTICIPANTS_DEST = f"/home/{TUTORIAL_USER}/" + PARTICIPANTS_REPO_URL.rsplit("/", 1)[-1].removesuffix(".git")
 
 # Set by local_scripts/setup_tutorial_user.sh and handed to the participants anyway, so there is
 # nothing here to protect: hardcoding it means a fresh laptop can drive a fresh fleet with no setup.
@@ -324,6 +338,48 @@ def summarize(results: list[Result]) -> int:
     return 0
 
 
+def _ansi(code: str) -> str:
+    """An ANSI escape, or nothing when stdout is not a terminal or NO_COLOR is set."""
+    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+        return ""
+    return f"\033[{code}m"
+
+
+def confirm_destructive(headline: str, detail: list[str], machines: list[Machine], phrase: str = "yes, I understand") -> bool:
+    """Print a warning in red and make the operator type `phrase` out in full before going on.
+
+    Deliberately not a y/n prompt, and deliberately a sentence rather than a word. This exists for
+    an action that destroys work nobody can get back, and a reflexive keystroke — or a reflexive
+    "yes" — is the thing it is guarding against. Typing a phrase takes long enough to notice what
+    the screen says.
+
+    Matching is case-insensitive and does not care how much whitespace is between the words: the
+    point is that the operator typed a sentence, not that they typed it perfectly.
+
+    There is no way past this. With no terminal to ask at it refuses, rather than falling back to
+    a flag that would mean consent: a --yes would end up in somebody's shell history or a wrapper
+    script, and then the sentence guards nothing.
+    """
+    red, bold, off = _ansi("31"), _ansi("1"), _ansi("0")
+
+    print(f"\n{red}{bold}!!! {headline}{off}")
+    for line in detail:
+        print(f"{red}    {line}{off}" if line else "")
+    print(f"\n    {len(machines)} machine(s): {', '.join(m.name for m in machines)}")
+
+    if not sys.stdin.isatty():
+        print(f"\n{red}No terminal to confirm at, and there is no flag that skips this.{off}")
+        print(f"{red}Re-run it by hand and type the sentence.{off}")
+        return False
+
+    try:
+        answer = input(f"\nType {bold}{phrase}{off} to continue, anything else to abort: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return " ".join(answer.lower().split()) == " ".join(phrase.lower().split())
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     machines = load_inventory(INVENTORY, args.machines)
     script_args = ["--repo", REPO_URL, "--branch", BRANCH, "--user", TUTORIAL_USER]
@@ -351,6 +407,60 @@ def cmd_sync(args: argparse.Namespace) -> int:
             ("ACTION", "action"),
             ("SHA", "sha"),
             ("BRANCH", "branch"),
+            ("NOTE", "@note"),
+        ],
+    )
+    return summarize(results)
+
+
+def cmd_sync_participants(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+    script_args = ["--repo", PARTICIPANTS_REPO_URL, "--branch", BRANCH, "--user", TUTORIAL_USER]
+    if args.force:
+        script_args.append("--force")
+
+    # Without --force the script refuses any destination that already exists, so the only way to
+    # lose someone's work is here. --dry-run connects to nothing, so there is nothing to confirm.
+    if args.force and not args.dry_run:
+        if not confirm_destructive(
+            "sync-participants --force DELETES the participant repo on every machine below.",
+            [
+                f"On each one {PARTICIPANTS_DEST} is removed and replaced by a fresh clone.",
+                "Everything a participant has done in that tree goes with it: edited exercises,",
+                "build directories, captures, notes. There is no backup and no undo.",
+                "",
+                "If the session is running, assume somebody is mid-exercise on these machines",
+                "and will lose it. Without --force nothing here is touched at all.",
+            ],
+            machines,
+        ):
+            print("aborted — nothing was touched")
+            return 1
+
+    print(
+        f"sync-participants: {BRANCH} -> {len(machines)} machine(s)"
+        f"{' (--force: whatever is in the destination will be DELETED)' if args.force else ''}"
+    )
+
+    results = run_fleet(
+        machines,
+        SCRIPTS_DIR / "sync_participants.sh",
+        script_args,
+        args.jobs,
+        args.timeout or DEFAULT_TIMEOUT,
+        args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("ACTION", "action"),
+            ("SHA", "sha"),
+            ("GIT REMOVED", "git_removed"),
             ("NOTE", "@note"),
         ],
     )
@@ -661,6 +771,35 @@ def main() -> int:
     )
     sync.add_argument("--force", action="store_true", help="reset --hard to origin/%s, discarding local changes" % BRANCH)
     sync.set_defaults(func=cmd_sync)
+
+    sync_participants = subparsers.add_parser(
+        "sync-participants",
+        parents=[common],
+        help="install the participant repo on each machine, without its git history",
+        description=(
+            f"Clone {PARTICIPANTS_REPO_URL} into ~{TUTORIAL_USER} and then DELETE its .git "
+            "directory, so what a participant finds is a plain directory of files. That is the "
+            "point of having a separate verb: the participant repo is regenerated by "
+            "admin/update_participants_repo_on_github.py, so its history contains every earlier "
+            "exercise -- including the period when solutions shipped alongside it -- and a "
+            "checkout would hand all of it to anyone who ran `git log -p`. This removes it FROM "
+            "THE MACHINE only; if that repo is public, the same history is one clone away from "
+            "any laptop, and rewriting the remote is the only thing that changes. "
+            "Because .git is gone there is no way to update the tree in place, only to replace "
+            "it. So a destination that already exists is LEFT ALONE and reported as a failure for "
+            "that machine -- the default can never destroy anything. --force is the only way to "
+            "replace it, and it deletes whatever was there including a participant's work, so it "
+            "stops and makes you type 'yes, I understand' in full first. There is no flag that "
+            "skips that prompt and it cannot run unattended. Use the 'sync' verb for OUR repo, "
+            "which stays a real checkout and can be fast-forwarded."
+        ),
+    )
+    sync_participants.add_argument(
+        "--force",
+        action="store_true",
+        help="replace the destination if it already exists, deleting whatever is in it (including a participant's work); asks you to confirm in full first",
+    )
+    sync_participants.set_defaults(func=cmd_sync_participants)
 
     doca = subparsers.add_parser(
         "doca",

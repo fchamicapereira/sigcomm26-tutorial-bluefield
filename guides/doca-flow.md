@@ -33,19 +33,26 @@ title: "Part 1 — Programming the data plane with DOCA Flow"
   THERE IS NO CAPTURE PATH IN THE EXERCISE. Three programs per tree now:
 
     doca_flow_ecn_pcap.c   marking + a hardware copy to a pcap (2.x mirror / 3.x flooding pipe).
-                           Hand-maintained, ours, ships to the participants' -solutions/ only, and
-                           is what D.2's optional sidebar points at for seeing the CE bit for real.
+                           Hand-maintained, ours. D.2 offers it as something an organiser can show.
     doca_flow_solution.c   the same without any of that. THE answer key, and the source
                            regen_templates.py derives from.
     doca_flow_template.c   generated. Do not hand-edit.
 
+  NO SOLUTIONS SHIP TO PARTICIPANTS. update_participants_repo_on_github.py copies the template
+  only -- there are no
+  doca-N-solutions/ directories, and neither doca_flow_solution.c nor doca_flow_ecn_pcap.c goes
+  over (the pcap one contains the same three answers). Same for PCC's rtt_template.c. So the guide
+  must never tell a participant to diff against a solution: "Checking your work" now points at the
+  counters instead, and D.2's capture step is an ask-an-organiser rather than a command. If we
+  decide to publish solutions after the session, that section is what changes.
+
   Dropping the mirror is what makes create_forward_to_sf_pipe identical on 2.x and 3.x: with it,
   the 3.x hit forward is a nine-line FWD_HASH_PIPE branch and the 2.x one is a single line.
 
-  In the participant repo BOTH the template and the solution are called doca_flow_ecn.c, in
-  doca-N/ and doca-N-solutions/ respectively -- sync_participants.py renames them. Every command in
-  this guide runs from the top of the repository; keep it that way (`ninja -C doca-2/build`, not
-  `cd doca-2 && ninja -C build`), because ./scripts/ does not exist one level down.
+  In the participant repo the template is called doca_flow_ecn.c, in doca-N/ --
+  update_participants_repo_on_github.py renames it. Every command in this guide runs from the top
+  of the repository; keep it that way (`ninja -C doca-2/build`, not `cd doca-2 && ninja -C build`),
+  because ./scripts/ does not exist one level down.
 
   FORM CHOICES, kept on purpose:
     PYTHON PSEUDO-CODE for main(), because the reader is navigating, not typing.
@@ -85,24 +92,22 @@ title: "Part 1 — Programming the data plane with DOCA Flow"
      Note the password is printed in this PDF, matching what guides/tailscale.md already does.
   6. Nobody has walked the exercise using this guide, and nobody has timed it. The 30-minute claim
      is a design target, not a measurement. Time it on one card before the session.
-  7. tutorial-doca-flow.md (the colleague's draft) still describes the OLD exercise -- four TODOs,
-     mirroring, --pcap, Stage 1/Stage 2 -- and sync_participants.py still ships it. Left alone on
-     purpose; retire or rewrite it before the session.
 -->
 
 In this part you program the **data plane** of a BlueField-3: you tell the NIC what to do with
-packets *in its own hardware, at line rate*, before any CPU sees them. You will complete a program
-that marks live RoCE traffic with an ECN congestion signal — the signal the congestion controller you
-write in Part 2 reacts to.
+packets *in its own hardware, at line rate*, before any CPU sees them. In this part of the tutorial, 
+you will write a program that marks live RoCE traffic with an ECN congestion signal. Later,
+on the second part of the tutorial, you will build a congestion controller on the Bluefield that
+reacts to those same signals.
 
 # The cards, and how to reach them
 
 Twelve BlueField-3 cards are available, in racks at four universities and NVIDIA. They are not on
 the public internet: you reach them over the tutorial's Tailscale network, which you joined with the
-pre-tutorial guide. If `tailscale status` lists the hosts below, you are ready.
+pre-tutorial guide (`tailscale.pdf`). If `tailscale status` lists the hosts below, you are ready.
 
-**The cards do not all run the same DOCA release, and that decides which directory you work in for
-the rest of this guide.** Find yours:
+The cards do not all run the same DOCA release, and that decides which directory you work in for
+the rest of this guide. You may pick one of the available Bluefields:
 
 | Host                | DOCA | You work in |
 | ------------------- | ---- | ----------- |
@@ -119,7 +124,7 @@ the rest of this guide.** Find yours:
 | `bf3-uwashington-2` | 3.1  | `doca-3/`   |
 | `bf3-uwaterloo-1`   | 3.4  | `doca-3/`   |
 
-Every command in this guide is written for `doca-2`; substitute `doca-3` throughout if that is your
+Every command in this guide is written for `doca-2`. Replace with `doca-3` throughout if that is your
 release. The few places the two genuinely differ are marked **[2.x]** and **[3.x]**, and everything
 unmarked applies to both.
 
@@ -134,48 +139,54 @@ $ ssh s26t@bf3-ulisbon-1
 ```
 
 > **Prerequisites.** That `ssh` puts you on the **Arm cores** of the BlueField-3 — a normal Ubuntu
-> shell that happens to run inside the NIC. You have this repository in your home directory and can
-> run `sudo`. **Every command below is typed on the Arm cores**; the host the card is plugged into
+> shell that happens to run inside the NIC. You have `sudo` permissions. You will be working on
+> `/home/s26t/sigcomm26-tutorial-bluefield-participants` throughout the tutorial.
+> **Every command below is typed on the Arm cores**. The host the card is plugged into
 > is never involved.
 
 # Part A — The card, and getting traffic onto it
 
-Your card has **two ports connected to each other (p0 and p1)**, so whatever leaves `p1` arrives at `p0`. That
-makes a single card behave like a small two-node network talking to itself. The two endpoints are
+Your card has **two ports reachable to each other (`p0` and `p1`)**, so whatever leaves `p1` arrives at `p0`,
+and vise-versa.
+That makes a single card behave like a small two-node network talking to itself.
+In this tutorial, we will be using two endpoints composed of
 lightweight virtual NICs called **SFs** (sub-functions), one per port, each in its own network
 namespace so the kernel cannot short-circuit them locally:
 
-| Endpoint     | RDMA device | Namespace | IP         | Role                  |
-| ------------ | ----------- | --------- | ---------- | --------------------- |
-| SF on port 0 | `mlx5_2`    | `ns0`     | `10.0.0.1` | **server** (receives) |
-| SF on port 1 | `mlx5_3`    | `ns1`     | `10.0.0.2` | **client** (sends)    |
+| Endpoint     | RDMA device | Namespace | IP         | Role                       |
+| ------------ | ----------- | --------- | ---------- | -------------------------- |
+| SF on port 0 | `mlx5_2`    | `ns0`     | `10.0.0.1` | **RoCE server** (receives) |
+| SF on port 1 | `mlx5_3`    | `ns1`     | `10.0.0.2` | **RoCE client** (sends)    |
 
-The client sends RDMA WRITEs to the server. They leave `p1`, cross the cable, and arrive at
-`p0` — where **your program** sees them.
+> **INFO — what is a sub-function?** A **sub-function (SF)** is a lightweight virtual NIC carved out
+> of a physical port. It shows up as its own network device. We create one SF on each side and use
+> the two of them as the *endpoints* of a network flow — so a single card can play both "sender" and
+> "receiver" across the cable.
 
-What you are reproducing is an everyday situation in a datacenter network: a sender is going as fast
+The client sends RDMA WRITEs over `p1`, and are later received by `p0` and ultimately fed to the server.
+
+What you will be reproducing is an everyday situation in a datacenter network: a sender is going as fast
 as it can, the network becomes congested, a switch on the path signals that congestion by setting
-the **ECN** bits in the IP header, and the sender slows down. Here, **your card plays the congested
-switch** — no congestion actually exists, you are *manufacturing* the signal, which is what makes it
-easy to see and to dial up and down.
+the [**ECN**](https://en.wikipedia.org/wiki/Explicit_Congestion_Notification)
+bits in the IP header, and the sender slows down. Here, your card simulates the congested
+switch — no congestion actually exists, but you will be *manufacturing* the congestion signal
+by configuring the Bluefield to mark the ECN bits on the packets.
 
-That splits into the two halves of the tutorial:
+As such, we split this tutorial into two parts:
 
 - **Part 1, this guide.** Program the NIC to set the ECN "congestion experienced" (CE) mark on a
-  fraction of the packets going past — you choose the fraction. Everything happens in hardware;
+  fraction of the client's packets going through the NIC — you choose the fraction. Everything happens in hardware;
   your program only installs the rules, then sits idle printing counters.
-- **Part 2.** Program the DPA to *react*: the server's NIC answers a CE-marked packet with a
+- **Part 2.** Program the Bluefield's DPA to *react*: the server's NIC answers a CE-marked packet with a
   congestion notification, and your algorithm turns each one into a lower send rate for the client.
 
 ![You write the marking in Part 1 and the reaction in Part 2. The client, the server, and the CNP the receiver's NIC sends back are already there.](../docs/tutorial-logical-setup.png)
 
-**Where things are.** The repository has one directory per DOCA release, plus a matching
-`-solutions` directory holding the finished program:
+**Where things are.** The repository has one directory per DOCA release:
 
 ```
-doca-2/doca-flow/doca_flow_ecn.c              <- the file you edit
-doca-2-solutions/doca-flow/doca_flow_ecn.c    <- the finished version
-scripts/                                      <- traffic generators
+doca-2/doca-flow/doca_flow_ecn.c    <- the file you edit
+scripts/                            <- traffic generators
 ```
 
 Every command in this guide is run from the top of the repository, so nothing below needs a `cd`.
@@ -189,11 +200,6 @@ p1            UP    ...     # physical port 1
 enp3s0f0s0    UP    ...     # a "sub-function" (SF) on the p0 side
 enp3s0f1s0    UP    ...     # a "sub-function" (SF) on the p1 side
 ```
-
-> **INFO — what is a sub-function?** A **sub-function (SF)** is a lightweight virtual NIC carved out
-> of a physical port. It shows up as its own network device. We create one SF on each side and use
-> the two of them as the *endpoints* of a network flow — so a single card can play both "sender" and
-> "receiver" across the cable.
 
 The traffic we will watch is **RoCE** (RDMA over Converged Ethernet), the high-speed, kernel-bypass
 transport used in AI and storage networks. RoCE does not use normal sockets; programs reach it
@@ -492,20 +498,10 @@ CE marked: 57060637, passthrough: 0 (100% marked)
 **That is you rewriting headers in hardware**, at line rate, with your program doing nothing but
 printing a number once a second.
 
-**Seeing the bit itself (optional).** The counter proves packets went through your marking pipe, not
-that the byte on the wire changed. The solutions directory carries a second program,
-`doca_flow_ecn_pcap`, which is this same pipeline plus a hardware copy of the traffic to a file:
-
-```bash
-$ meson setup doca-2-solutions/build doca-2-solutions
-$ ninja -C doca-2-solutions/build
-$ sudo ./doca-2-solutions/build/doca-flow/doca_flow_ecn_pcap -- --pcap /tmp/o.pcap --percent 100
-```
-
-Writing starts **paused**; press SPACE to begin, Ctrl-C after a few seconds to flush and close the
-file, then read the ECN bits back with `./scripts/check_ecn_bits_from_pcap.sh /tmp/o.pcap`. Marked
-packets show as `tos 0x3,CE`. Throughput stays at line rate throughout — the copy is made in
-hardware.
+> **Seeing the bit itself.** The counter proves packets went through your marking pipe, not that
+> the byte on the wire changed. Ask an organiser if you want to watch that directly: we have a
+> version of this program that also mirrors the traffic into a capture file, in hardware and at no
+> cost to throughput, and `tcpdump` then shows the marked packets as `tos 0x3,CE`.
 
 ## D.3 — Mark only some packets
 
@@ -530,16 +526,14 @@ CE marked: 28530318, passthrough: 28530319 (50% marked)
 
 Try `--percent 25` and `--percent 10` and watch the split follow.
 
-## Check your answer
+## Checking your work
 
-The finished program sits next to yours:
+There is no answer key in your checkout, and you do not need one: the program tells you where you
+stand at every step. Traffic back at line rate ends D.1, `CE marked:` climbing ends D.2, and the two
+counters splitting in the ratio you asked for ends D.3. When one of those does not happen, the
+debugging tips below name the usual cause.
 
-```bash
-$ diff doca-2/doca-flow/doca_flow_ecn.c doca-2-solutions/doca-flow/doca_flow_ecn.c
-```
-
-Expect your three function bodies, plus `build_pipeline()` — the solution has the pipeline live and
-the no-op call commented out, which is exactly the edit you made in D.1.
+Ask an organiser if you are stuck. That is what we are here for.
 
 # Debugging tips
 
@@ -710,8 +704,8 @@ optionally a *miss* forward:
 **Shared resources.** Objects living on the port rather than inside one pipe, so several pipes can
 point at a single instance: meters, counters, RSS contexts, encap/decap contexts — and, on 2.x,
 **mirrors**, which duplicate a packet towards a second destination. Mirrors were removed in DOCA
-3.2; `doca_flow_ecn_pcap` is where the two versions diverge over it, using a mirror on 2.x and a
-flooding hash pipe on 3.x to copy traffic into a capture file. Neither is part of this exercise.
+3.2, and copying traffic into a capture file is where the two versions diverge hardest over it: a
+shared mirror on 2.x, a flooding hash pipe on 3.x. Neither is part of this exercise.
 
 **Parser metadata.** `parser_meta` holds values the hardware parser attaches to each packet, rather
 than header fields: `outer_l3_type` (what the parser saw), `random` (a fresh 16-bit value per packet,
@@ -769,9 +763,6 @@ have open rather than translating between them.
 | ------------- | ------------------------------------------------------------------------------------------------ |
 | `--percent N` | CE-mark this share of packets, `[0, 100]`, rounded down to a power-of-two fraction. Default 100. |
 
-`doca_flow_ecn_pcap`, the capture-capable program in the solutions directory, takes two more:
-`--pcap FILE` to write a hardware copy of the traffic to `FILE`, and `--sample N` to write only
-about 1-in-N of those packets. Neither affects marking or forwarding.
 
 ## Further reading
 

@@ -80,7 +80,8 @@ $(basename $(MDS)): %: %.pdf
 # xelatex's .log, so this runs pandoc to .tex and xelatex by hand to get at it.
 #
 # Not part of `all`, because it doubles the work and these are publication defects rather than
-# build failures. Run it before handing a guide out, or before sync_participants.py.
+# build failures. Run it before handing a guide out, or before
+# update_participants_repo_on_github.py.
 #
 # When it flags an overfull line, the fix is almost always in the Markdown, not the template: a long
 # unbreakable `\texttt` token -- a 40-character DOCA identifier or an absolute path -- that TeX

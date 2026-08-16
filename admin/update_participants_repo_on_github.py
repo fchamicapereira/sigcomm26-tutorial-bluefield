@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Rebuild the participant repository from this one.
 
-Participants get a much smaller tree than this repo: the exercises, the solutions to check them
-against, the guides, and the scripts that drive traffic. Everything else here -- the fleet tooling,
-the Dockerfiles, the porting notes, the guide sources, the PCC docs and tuning tools -- is ours and
-only gets in their way. So is doca_flow_nop: the flow exercise now ships with its own worked
-no-op forwarder inside the file being edited, so a second copy as a separate program is redundant.
+Participants get a much smaller tree than this repo: the exercises, the guides, and the scripts that
+drive traffic. Everything else here -- the fleet tooling, the Dockerfiles, the guide sources, the PCC
+docs and tuning tools -- is ours and only gets in their way. So is doca_flow_nop: the flow exercise
+ships with its own worked no-op forwarder inside the file being edited, so a second copy as a
+separate program is redundant.
+
+NO SOLUTIONS SHIP. Neither the finished flow program (doca_flow_solution.c, or the capture-capable
+doca_flow_ecn_pcap.c, which contains the same three answers) nor the finished PCC controller
+(rtt_template.c) is copied over. There are no doca-N-solutions/ directories any more; MANAGED still
+lists them so that a checkout from before this change gets them deleted.
 
 Two exercises ship: the DOCA Flow ECN/mirror pipeline (doca-flow/) and, for any version that has a
 PCC template (device/algo/rtt_template_exercise.c), the DOCA PCC pure-ECN reaction-point controller
@@ -20,10 +25,7 @@ Layout it produces:
 
     doca-2/                       flow exercise (from doca_flow_template.c) + pcc exercise (from
                                   doca-pcc-ecn/device/algo/rtt_template_exercise.c)
-    doca-2-solutions/             the same programs complete (from doca_flow_solution.c and
-                                  rtt_template.c), plus doca_flow_ecn_pcap.c, the capture-capable
-                                  flow program that is not part of any exercise
-    doca-3/ doca-3-solutions/     ditto for the DOCA 3 tree (pcc only if it has a template)
+    doca-3/                       ditto for the DOCA 3 tree (pcc only if it has a template)
     tutorial-doca-flow.md         Part I hands-on guide (Markdown; flow filename rewritten)
     tutorial-doca-pcc.md          Part II hands-on guide (Markdown)
     guides/*.pdf                  the rendered guides only, no LaTeX (see GUIDES)
@@ -31,17 +33,21 @@ Layout it produces:
     .vscode/                      IntelliSense paths for the DOCA/DPDK headers on the card
     .clang-format
 
-In both the exercise and the solution directory the flow program is called doca_flow_ecn.c. The
-"template" and "solution" names are artefacts of how the exercise is derived here (see
-admin/local_scripts/regen_templates.py) and mean nothing to a participant, who simply has one
-program with three functions to write.
+The flow program is called doca_flow_ecn.c over there. "Template" is our word for it -- an artefact
+of how the exercise is derived here, see admin/local_scripts/regen_templates.py -- and means nothing
+to a participant, who simply has one program with three functions to write.
 
-Usage:
-    admin/sync_participants.py                  # populate the checkout, leave it uncommitted
-    admin/sync_participants.py --dry-run        # say what would change, touch nothing
-    admin/sync_participants.py --push           # commit and push to the participant remote
+Usage (S=admin/update_participants_repo_on_github.py):
+
+    $S                # populate the checkout, leave it uncommitted
+    $S --dry-run      # say what would change, touch nothing
+    $S --push         # commit and push to the participant remote
 
 The checkout lives in .participants/ (gitignored) and is cloned on first use.
+
+This is the LAPTOP end of the pipeline: it writes the participant repo on GitHub. The other end is
+`admin/fleet.py sync-participants`, which installs that repo onto every card -- and deletes its
+.git on the way, so nothing published here can be read back out of the history on a machine.
 """
 
 import argparse
@@ -76,7 +82,7 @@ ASSETS = {"participants/c_cpp_properties.json": ".vscode/c_cpp_properties.json"}
 # into the source). They ship to the participant repo ROOT, unrendered, so GitHub shows the
 # collapsibles and the doca-2/... source links resolve. The value says whether to apply the flow
 # rename: the flow guide points at doca_flow_template.c, which build_version() renames to
-# doca_flow_ecn_pcap.c for participants, so its links must be rewritten to match (the #L anchors are
+# doca_flow_ecn.c for participants, so its links must be rewritten to match (the #L anchors are
 # unaffected -- same file, same lines, only the name changes). HTML author-comments are stripped.
 TUTORIAL_GUIDES = {
     "tutorial-doca-flow.md": True,
@@ -84,6 +90,10 @@ TUTORIAL_GUIDES = {
 }
 
 # Top-level directories this script owns. Anything else in the participant repo survives a run.
+#
+# The doca-N-solutions/ names are still listed although nothing writes them any more: MANAGED is
+# what gets deleted before each rebuild, so keeping them here is what removes the solution
+# directories an earlier sync left behind. Drop them once no participant checkout has them.
 MANAGED = [f"{v}{suffix}" for v in VERSIONS for suffix in ("", "-solutions")] + [
     "guides",
     "scripts",
@@ -123,8 +133,8 @@ def trim_pcc_targets(meson_src):
 
 
 # doca-pcc-ecn paths that never ship to participants: the maintainer-only write-ups and tuning
-# tools, plus the two algo sources -- handled specially, since the exercise's rtt_template.c comes
-# from the scaffold and the solution's from the finished controller.
+# tools, plus the two algo sources. rtt_template.c is the finished controller and is skipped for
+# that reason alone; the exercise's rtt_template.c is copied separately, from the scaffold.
 PCC_SKIP = {
     "device/algo/rtt_template.c",
     "device/algo/rtt_template_exercise.c",
@@ -142,13 +152,13 @@ def has_pcc_exercise(version):
     return (REPO / version / "doca-pcc-ecn" / "device" / "algo" / "rtt_template_exercise.c").is_file()
 
 
-def build_pcc(dest, version, solutions, changes, dry_run):
-    """Populate one version's doca-pcc-ecn/ -- the exercise from the scaffold, the solution from the
-    finished controller, both named device/algo/rtt_template.c so the build and the diff-check just
-    work. Copies the rest of the tree (host/, device/, build_device_code.sh, deps) verbatim, minus
-    PCC_SKIP, and trims the meson to the single doca_pcc_ecn_rp target."""
+def build_pcc(dest, version, changes, dry_run):
+    """Populate one version's doca-pcc-ecn/ -- the exercise, from the scaffold, named
+    device/algo/rtt_template.c so the build just works. Copies the rest of the tree (host/, device/,
+    build_device_code.sh, deps) verbatim, minus PCC_SKIP, and trims the meson to the single
+    doca_pcc_ecn_rp target."""
     src = REPO / version / "doca-pcc-ecn"
-    out = dest / (version + ("-solutions" if solutions else "")) / "doca-pcc-ecn"
+    out = dest / version / "doca-pcc-ecn"
     for f in sorted(p for p in src.rglob("*") if p.is_file()):
         rel = f.relative_to(src).as_posix()
         if rel in PCC_SKIP:
@@ -157,24 +167,17 @@ def build_pcc(dest, version, solutions, changes, dry_run):
             write(out / rel, trim_pcc_targets(f.read_text()), changes, dry_run)
         else:
             copy(f, out / rel, changes, dry_run)
-    answer = src / "device" / "algo" / "rtt_template.c"
     scaffold = src / "device" / "algo" / "rtt_template_exercise.c"
-    copy(answer if solutions else scaffold, out / "device" / "algo" / "rtt_template.c",
-         changes, dry_run)
+    copy(scaffold, out / "device" / "algo" / "rtt_template.c", changes, dry_run)
 
 
 # The participant's doca-flow/meson.build, written from here rather than trimmed out of ours.
 #
 # Ours carries four targets -- flow_nop, flow_ecn_pcap, flow_solution, flow_template -- and none of
-# those names mean anything over there: the participant has ONE program, doca_flow_ecn.c, which is
-# the template in doca-N/ and the finished version in doca-N-solutions/. Deriving that by deleting
-# blocks was already fragile, and with the exercise and the solution now being different source
-# files it would also have to rename the target. Writing it out is shorter and says what it means.
-#
-# The solutions directory gets one extra target: doca_flow_ecn_pcap, the fuller program that also
-# copies the traffic to a pcap file so the CE mark can be seen on the wire. It is not part of the
-# exercise -- nothing in doca-N/ refers to it -- and it is the only target that needs libpcap.
-FLOW_MESON_HEAD = """\
+# those names mean anything over there: the participant has ONE program, doca_flow_ecn.c, built from
+# doca_flow_template.c. Deriving this by deleting blocks from ours was already fragile, and it would
+# also have to rename the target. Writing it out is shorter and says what it means.
+FLOW_MESON = """\
 # doca_flow_compat.h shims a few DOCA 2.9 API renames (doca_flow_resource_query_entry,
 # doca_flow_shared_resource_set_cfg) back onto their pre-2.9 names, so the same sources build
 # unchanged against every DOCA release this repo targets. Force-included ahead of every .c file's
@@ -193,28 +196,13 @@ executable(DOCA_PREFIX + 'flow_ecn',
 \tinstall: false)
 """
 
-FLOW_MESON_PCAP = """
-# The same pipeline plus a hardware copy of the traffic to a pcap file, so you can read the ECN bits
-# off the wire with tcpdump. Not part of the exercise; nothing here is a TODO. Links libpcap.
-pcap_dep = meson.get_compiler('c').find_library('pcap', required : true)
-
-executable(DOCA_PREFIX + 'flow_ecn_pcap',
-\t['doca_flow_ecn_pcap.c'],
-\tc_args : flow_c_args,
-\tdependencies : app_dependencies + [pcap_dep],
-\tinclude_directories : app_inc_dirs,
-\tinstall: false)
-"""
-
-
-def flow_meson(meson_src, solutions):
+def flow_meson(meson_src):
     """The participant's doca-flow/meson.build. `meson_src` is ours, checked only to make sure the
-    sources this assumes still exist -- so renaming one here fails the sync instead of shipping a
+    source this assumes still exists -- so renaming it here fails the sync instead of shipping a
     meson.build that names a file nobody has."""
-    for expected in ("doca_flow_template.c", "doca_flow_solution.c", "doca_flow_ecn_pcap.c"):
-        if expected not in meson_src:
-            sys.exit(f"doca-flow/meson.build no longer builds {expected} -- adapt this script")
-    return FLOW_MESON_HEAD + (FLOW_MESON_PCAP if solutions else "")
+    if "doca_flow_template.c" not in meson_src:
+        sys.exit("doca-flow/meson.build no longer builds doca_flow_template.c -- adapt this script")
+    return FLOW_MESON
 
 
 def write(path, data, changes, dry_run, executable=False):
@@ -254,10 +242,10 @@ def render_guide(text, flow_rename):
     return text
 
 
-def build_version(dest, version, solutions, changes, dry_run):
-    """Populate one doca-N/ or doca-N-solutions/ directory."""
+def build_version(dest, version, changes, dry_run):
+    """Populate one doca-N/ directory."""
     src = REPO / version
-    out = dest / (version + ("-solutions" if solutions else ""))
+    out = dest / version
     flow_src = src / "doca-flow"
     flow_out = out / "doca-flow"
     include_pcc = has_pcc_exercise(version)
@@ -266,7 +254,7 @@ def build_version(dest, version, solutions, changes, dry_run):
           app_list_meson((src / "meson.build").read_text(), include_pcc), changes, dry_run)
     write(
         flow_out / "meson.build",
-        flow_meson((flow_src / "meson.build").read_text(), solutions),
+        flow_meson((flow_src / "meson.build").read_text()),
         changes,
         dry_run,
     )
@@ -274,19 +262,12 @@ def build_version(dest, version, solutions, changes, dry_run):
          changes, dry_run)
     copy(flow_src / "doca_flow_compat.h", flow_out / "doca_flow_compat.h", changes, dry_run)
 
-    # The exercise, and its answer. Both are called doca_flow_ecn.c over there -- the participant
-    # has one program, and `diff doca-N/... doca-N-solutions/...` is how they check their work.
-    program = "doca_flow_solution.c" if solutions else "doca_flow_template.c"
-    copy(flow_src / program, flow_out / "doca_flow_ecn.c", changes, dry_run)
-
-    # The capture-capable version ships to the solutions side only: it is how you actually SEE a CE
-    # mark on the wire, but its mirror (2.x) and flooding pipe (3.x) are not part of the exercise
-    # and would only be noise in the directory the participant edits.
-    if solutions:
-        copy(flow_src / "doca_flow_ecn_pcap.c", flow_out / "doca_flow_ecn_pcap.c", changes, dry_run)
+    # The exercise. Called doca_flow_ecn.c over there: "template" is our word for it, and a
+    # participant has just the one program.
+    copy(flow_src / "doca_flow_template.c", flow_out / "doca_flow_ecn.c", changes, dry_run)
 
     if include_pcc:
-        build_pcc(dest, version, solutions, changes, dry_run)
+        build_pcc(dest, version, changes, dry_run)
 
 
 def ensure_checkout(dest, dry_run):
@@ -328,8 +309,7 @@ def main():
                 shutil.rmtree(path)
 
     for version in VERSIONS:
-        for solutions in (False, True):
-            build_version(dest, version, solutions, changes, args.dry_run)
+        build_version(dest, version, changes, args.dry_run)
 
     for guide in GUIDES:
         src = REPO / "guides" / guide

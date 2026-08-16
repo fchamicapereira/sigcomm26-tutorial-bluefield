@@ -44,7 +44,8 @@ executable(DOCA_PREFIX + 'pcc_ecn_rp',
 # additive increase) hollowed out to TODO 1 and TODO 2. It builds and runs, but does no rate
 # control until you fill them in. `diff` it against algo/rtt_template.c for the answer. Same fixed
 # app symbol (pcc_ecn_rp_app), a separate build dir/archive, so the two never collide. Maintainer-
-# only: sync_participants.py drops this block, and ships the scaffold as the participant exercise.
+# only: update_participants_repo_on_github.py drops this block, and ships the scaffold as the
+# participant exercise.
 exercise_build_dir = meson.current_build_dir() / 'device' / 'build_dpacc_exercise'
 run_command(device_build_script,
 	meson.current_source_dir() / 'device',
