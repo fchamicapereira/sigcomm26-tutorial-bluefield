@@ -102,12 +102,24 @@ ingress_bw_mean() { # ingress_bw_mean <log> <last-N samples>
 			printf "%.3f %.3f\n",t0/(c-s+1),t1/(c-s+1)
 		}' "$1"
 }
-ce_counter_last() { # ce_counter_last <log> <0|1>
-	case "$2" in
-		0) sed -n 's/.*ingress newly CE-marked: path0=\([0-9]*\).*/\1/p' "$1" | tail -1 ;;
-		1) sed -n 's/.*ingress newly CE-marked: .*path1=\([0-9]*\).*/\1/p' "$1" | tail -1 ;;
-		*) return 2 ;;
-	esac
+ce_delta_sum() { # ce_delta_sum <log> <last-N samples>
+	awk -v n="$2" '
+		/ingress newly CE-marked: path0=/ {
+			d0 = d1 = ""; seen = 0
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^\(\+[0-9]+,$/) {
+					v=$i; gsub(/[^0-9]/,"",v)
+					if (++seen == 1) d0=v; else if (seen == 2) d1=v
+				}
+			}
+			if (d0 != "" && d1 != "") {a0[++c]=d0; a1[c]=d1}
+		}
+		END {
+			if (!c) exit 1
+			s=c-n+1; if(s<1)s=1
+			for(i=s;i<=c;i++){t0+=a0[i];t1+=a1[i]}
+			printf "%.0f %.0f\n",t0,t1
+		}' "$1"
 }
 
 STEP_NAMES=(); STEP_STATES=(); STEP_DETAILS=(); STEP_DETAIL=""
@@ -154,7 +166,7 @@ log "== preflight =="; log "   repo: $REPO"; log "   logs: $LOGDIR"
 DOCA_VERSION=$("$REPO/admin/local_scripts/print_doca_version.sh" 2>/dev/null) || die "cannot determine DOCA version"
 emit doca "$DOCA_VERSION"
 case "$DOCA_VERSION" in
-	2.7*|2.9*) VERSION_DIR=doca-2 ;;
+	2.9*) VERSION_DIR=doca-2 ;;
 	3.*) VERSION_DIR=doca-3 ;;
 	*) emit verdict unsupported; emit subject "path steering does not target DOCA $DOCA_VERSION"; exit 1 ;;
 esac
@@ -280,19 +292,20 @@ phase_path_distribution() {
 	STEP_DETAIL="path0=${STEER_BW0} Gb/s path1=${STEER_BW1} Gb/s total=${STEER_TOTAL} Gb/s ratio=${PATH_RATIO}"
 }
 phase_ecn_ratio() {
-	local p0a p1a p0b p1b d0 d1
-	p0a=$(ce_counter_last "$INGRESS_LOG" 0); p1a=$(ce_counter_last "$INGRESS_LOG" 1)
+	local d0 d1
+	# Wait for one complete window, then take CE deltas and path bandwidth from
+	# the same last-N per-second records. PCC may change the share during this
+	# phase, so bandwidth sampled before the sleep cannot normalize these marks.
 	sleep "$WINDOW"
-	p0b=$(ce_counter_last "$INGRESS_LOG" 0); p1b=$(ce_counter_last "$INGRESS_LOG" 1)
-	[ -n "$p0a" ] && [ -n "$p1a" ] && [ -n "$p0b" ] && [ -n "$p1b" ] || { show_tail "$INGRESS_LOG"; STEP_DETAIL="missing ingress CE counters"; return 1; }
-	d0=$((p0b-p0a)); d1=$((p1b-p1a)); [ "$d0" -gt 0 ] && [ "$d1" -gt 0 ] || { STEP_DETAIL="CE deltas are path0=$d0 path1=$d1"; return 1; }
-	# CE counts scale with both marking probability and traffic volume. Compare
-	# CE events per Gbit: unequal path bandwidth makes the raw count ratio differ
-	# from the configured 0.05/0.025 = 2x probability ratio.
+	read -r d0 d1 < <(ce_delta_sum "$INGRESS_LOG" "$WINDOW") || { show_tail "$INGRESS_LOG"; STEP_DETAIL="missing ingress CE deltas"; return 1; }
+	read -r STEER_BW0 STEER_BW1 < <(ingress_bw_mean "$INGRESS_LOG" "$WINDOW") || { show_tail "$INGRESS_LOG"; STEP_DETAIL="missing ingress path-throughput counters"; return 1; }
+	[ "$d0" -gt 0 ] && [ "$d1" -gt 0 ] || { STEP_DETAIL="CE deltas are path0=$d0 path1=$d1"; return 1; }
+	PATH_RATIO=$(awk -v p0="$STEER_BW0" -v p1="$STEER_BW1" 'BEGIN{if(p1<=0)exit 1; printf "%.3f",p0/p1}') || { STEP_DETAIL="path1 ingress throughput is zero"; return 1; }
+	STEER_TOTAL=$(awk -v p0="$STEER_BW0" -v p1="$STEER_BW1" 'BEGIN{printf "%.3f",p0+p1}')
 	CE_RAW_RATIO=$(awk -v a="$d1" -v b="$d0" 'BEGIN{printf "%.3f",a/b}')
 	CE_RATIO=$(awk -v c1="$d1" -v c0="$d0" -v bw0="$STEER_BW0" -v bw1="$STEER_BW1" 'BEGIN{printf "%.3f",(c1/bw1)/(c0/bw0)}')
 	awk -v r="$CE_RATIO" -v lo="$MIN_CE_RATIO" -v hi="$MAX_CE_RATIO" 'BEGIN{exit !(r>=lo && r<=hi)}' || { STEP_DETAIL="CE ratio path1/path0=$CE_RATIO, expected $MIN_CE_RATIO..$MAX_CE_RATIO"; return 1; }
-	CE_PATH0=$d0; CE_PATH1=$d1; STEP_DETAIL="path0=$d0 path1=$d1 raw-ratio=$CE_RAW_RATIO normalized-ratio=$CE_RATIO"
+	CE_PATH0=$d0; CE_PATH1=$d1; STEP_DETAIL="same-window path0=$d0 path1=$d1 raw-ratio=$CE_RAW_RATIO normalized-ratio=$CE_RATIO"
 }
 phase_share() {
 	local waited=0 line new
