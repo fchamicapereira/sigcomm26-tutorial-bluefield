@@ -162,7 +162,9 @@ cleanup() {
 
 log "== preflight =="; log "   repo: $REPO"; log "   logs: $LOGDIR"
 [ -d "$REPO" ] || die "tutorial checkout missing"
-[ -x "$SETUP" ] || die "$SETUP is missing"
+if [ "$SKIP_SETUP" -eq 0 ]; then
+	[ -x "$SETUP" ] || die "$SETUP is missing"
+fi
 DOCA_VERSION=$("$REPO/admin/local_scripts/print_doca_version.sh" 2>/dev/null) || die "cannot determine DOCA version"
 emit doca "$DOCA_VERSION"
 case "$DOCA_VERSION" in

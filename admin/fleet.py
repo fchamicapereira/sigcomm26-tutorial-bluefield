@@ -640,8 +640,9 @@ def cmd_test_path_steering(args: argparse.Namespace) -> int:
     if args.force:
         script_args.append("--force")
 
+    mode = "reusing existing topology" if args.skip_setup else "destructive topology setup"
     print(
-        f"test-path-steering: {len(machines)} machine(s) — destructive; "
+        f"test-path-steering: {len(machines)} machine(s) — {mode}; "
         f"at most {TEST_TIMEOUT // 60} min before a machine is given up on"
     )
     results = run_fleet(
