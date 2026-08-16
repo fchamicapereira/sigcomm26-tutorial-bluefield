@@ -83,7 +83,27 @@ title: "Part 1 — Programming the data plane with DOCA Flow"
   3. benchmark.sh resolves ttyplot as $SCRIPT_DIR/ttyplot/ttyplot; in the participant repo the
      script lands in scripts/, so it looks for scripts/ttyplot/ttyplot. Part A tells participants to
      use benchmark.sh first, so confirm setup_ttyplot.sh puts it where the synced copy will look.
-  4. Unverified prose: the claim that participants never run setup_roce_loopback.sh themselves.
+  4. VERIFIED ON HARDWARE 2026-08-16, all twelve cards, via a read-only probe over fleet.py.
+     The loopback IS already set up everywhere (ns0 + ns1 present), so Part A is right that
+     participants never run setup_roce_loopback.sh.
+     The device names in Part A were WRONG before that probe and are now real pastes. What was
+     wrong: enp3s0f0s0 / enp3s0f1s0 / mlx5_2 / mlx5_3 are correct names but exist ONLY INSIDE
+     ns0 and ns1, and the guide had participants running `ip -br link show` and `rdma link show`
+     in the default namespace, where none of them appear. In the default namespace the SFs show
+     up switchdev-style as en3f0pf0sf0 / en3f1pf1sf0, and `rdma link show` lists only mlx5_0 and
+     mlx5_1 with dozens of mostly-DOWN ports.
+     Every command block in Part A's device section was then re-run VERBATIM on all twelve and the
+     output checked against it. The two `rdma link show` lines are byte-identical on 12/12.
+     The blocks are ANNOTATED and lightly TRIMMED on purpose, so they are not literal pastes:
+     trailing `# ...` comments explain each line, the column padding is ours, and the fe80::
+     link-local that `ip -br addr show` really prints is cut as noise. The p0/p1 MACs are one
+     card's and are flagged as such. Keep it that way -- readable beats verbatim here -- but do
+     not let the SUBSTANCE drift from what the cards print.
+     Uniform across the fleet: p0, p1, pf0hpf, pf1hpf, en3f0pf0sf0, en3f1pf1sf0, ovsbr1, ovsbr2,
+     ovs-system, oob_net0, tmfifo_net0, tailscale0 on 12/12; en3f0pf0sf4 (ns0_1, 10.0.0.11) on
+     11/12 -- not bf3-umich-2; docker0 on 2/12. Inside ns0/ns1 every card is identical.
+     Hostnames vary and mean nothing (bluefield-lisbon-1, bluefield-2, dpu, umich-bluefield3,
+     localhost.localdomain, ...) -- go by the Tailscale name.
   5. THE HOST/DOCA TABLE at the top is transcribed from admin/results/*.print_doca_version.log --
      the last fleet-wide run of print_doca_version.sh, which reported pkg-config as the source on
      all twelve. Re-run `admin/fleet.py` and re-transcribe if a card is reimaged or added; the
@@ -191,29 +211,55 @@ scripts/                            <- traffic generators
 
 Every command in this guide is run from the top of the repository, so nothing below needs a `cd`.
 
-**The network devices you will use.** Run this to see the card's network interfaces:
+**The network devices of the physical ports.** The two physical ports are visible as soon as you log in:
 
 ```bash
-$ ip -br link show | grep -E '^p0|^p1|^enp3'
-p0            UP    ...     # physical port 0
-p1            UP    ...     # physical port 1
-enp3s0f0s0    UP    ...     # a "sub-function" (SF) on the p0 side
-enp3s0f1s0    UP    ...     # a "sub-function" (SF) on the p1 side
+$ ip -br link show | grep -E '^p0|^p1'
+p0            UP    f0:fb:7f:e2:e2:76 <BROADCAST,MULTICAST,UP,LOWER_UP>
+p1            UP    f0:fb:7f:e2:e2:77 <BROADCAST,MULTICAST,UP,LOWER_UP>
 ```
+
+(Those MAC addresses are your card's own, so yours will read differently.)
+
+**The RoCE endpoints.** The RoCE endpoints live inside the `ns0` and `ns1` namespaces, so you have to look
+from within each namespace — the server's SF first, then the client's:
+
+```bash
+$ sudo ip netns exec ns0 ip -br addr show enp3s0f0s0
+enp3s0f0s0    UP    10.0.0.1/24     # the server's SF, on the p0 side
+$ sudo ip netns exec ns1 ip -br addr show enp3s0f1s0
+enp3s0f1s0    UP    10.0.0.2/24     # the client's SF, on the p1 side
+```
+
+Those two addresses are the same on every card in the room.
+
+> **Don't worry about everything else `ip -br link show` prints.** The full listing has a
+> dozen more interfaces on every card: `pf0hpf` and `pf1hpf` (the host's view of each port),
+> `en3f0pf0sf0` and `en3f1pf1sf0` (the *switch* side of the two SFs above — this is what your
+> pipeline forwards to), `ovsbr1`, `ovsbr2` and `ovs-system` (the card's default forwarding),
+> `oob_net0`, `tmfifo_net0` and `tailscale0` (management), and so on. Which of these you see
+> varies from card to card; none of them changes anything you do here.
 
 The traffic we will watch is **RoCE** (RDMA over Converged Ethernet), the high-speed, kernel-bypass
-transport used in AI and storage networks. RoCE doesn't use normal sockets. Instead, programs reach it
-through **RDMA devices** named `mlx5_0`, `mlx5_1`, `mlx5_2`, `mlx5_3`. List them:
+transport used in AI and storage networks. RoCE doesn't use normal sockets. Instead, programs reach
+it through **RDMA devices** named `mlx5_N`. Each SF has one, and — like the netdev — it is only
+visible from inside that SF's namespace:
 
 ```bash
-$ rdma link show
-link mlx5_0/1 ... netdev pf0hpf     # RDMA device for physical port p0
-link mlx5_1/1 ... netdev p1         # RDMA device for physical port p1
-link mlx5_2/1 ... netdev enp3s0f0s0 # RDMA device for the SF on p0 ← we use this one
-link mlx5_3/1 ... netdev enp3s0f1s0 # RDMA device for the SF on p1 ← and this one
+$ sudo ip netns exec ns0 rdma link show
+link mlx5_2/1 state ACTIVE physical_state LINK_UP netdev enp3s0f0s0   # the server's SF
+$ sudo ip netns exec ns1 rdma link show
+link mlx5_3/1 state ACTIVE physical_state LINK_UP netdev enp3s0f1s0   # the client's SF
 ```
 
-Remember this mapping: **`mlx5_2` and `mlx5_3` are the two SF endpoints** we send RoCE between.
+One line each, and identical on every card in the room.
+
+> **Run `rdma link show` outside a namespace and none of that appears.** You get `mlx5_0` and
+> `mlx5_1` — the two physical ports — each listing dozens of ports, most of them `DOWN`. That is
+> the switch's own view, not the endpoints'. `mlx5_2` and `mlx5_3` are the names you want, and
+> `ip netns exec` is what makes them visible.
+
+**`mlx5_2` and `mlx5_3` are the two SF endpoints** we send RoCE between.
 `mlx5_0`/`mlx5_1` are the physical ports themselves.
 
 **Step 1: wire up the two endpoints**.
