@@ -464,21 +464,26 @@ should show near line rate (~92 Gb/s) at the same time. You are marking packets 
 
 #### Stage 2 — capture a copy, and see the mark
 
-Marking works, but so far you are trusting a counter. Now send a **copy** of every packet to a
-capture file so you can look at the ECN bits yourself. The copy is made by a **mirror**, and it lands
-in the `create_to_cpu_pipe` you set aside earlier (already written for you).
+So far the only sign your marking works is a counter ticking up — you have not actually *seen* a CE
+bit on a packet. Stage 2 fixes that: you capture live traffic to a file and read the ECN bits with
+`tcpdump`. To do that without slowing the data path, the NIC makes a **copy** of each packet and
+sends the copy to the CPU (and on to your capture file) while the original keeps forwarding at line
+rate. That copy mechanism is a **mirror**; the copies are received by `create_to_cpu_pipe`, which is
+already written for you — so the only new thing *you* wire up is the mirror itself.
 
-Two small additions, both about the mirror:
+That is two changes, and the comment above each one in the source walks you through it step by step;
+here is what they are and why:
 
-**1. `bind_capture_mirror`** ([`TODO 3`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L723)). It builds no
-pipe — it configures a shared "mirror" resource and points it at `cpu_pipe`, so a *copy* of each
-packet is delivered to the CPU (and your pcap) while the original keeps forwarding. Follow the
-step-by-step in the comment above it.
+**1. Write `bind_capture_mirror`** ([`TODO 3`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L723)) — it
+builds no pipe of its own. It sets up the shared *mirror* once and aims it at `cpu_pipe`, so a copy
+of every hit reaches the CPU (and your pcap) while the original keeps going. Follow the numbered
+steps in the comment directly above the function.
 
-**2. Use the `mirror` parameter** you ignored in Stage 1. Back in `create_forward_to_sf_pipe`, add the
-small `if (mirror) …` block that attaches the shared mirror to the marking pipe (the comment there
-shows how). Now, and only when `--pcap` makes `mirror` true, each marked packet is also copied to the
-capture — while the original still forwards at line rate.
+**2. Switch the mirror on in your marking pipe.** In `create_forward_to_sf_pipe` — the TODO 2 you
+already wrote — there is a `mirror` parameter you left unused in Stage 1. Add the short
+`if (mirror) …` block the comment points to; it attaches the shared mirror to that pipe. Now, only
+when you pass `--pcap` (which is what makes `mirror` true), each marked packet is copied to the
+capture too, and the original still forwards at full speed.
 
 <details>
 <summary><b>Try it yourself! — capture the traffic and see the CE mark</b></summary>
@@ -498,8 +503,7 @@ CE marked: 57060637, passthrough: 0 (100% marked) | mirrored: 2743653 -> pcap: 0
 `mirrored:` climbing = copies are reaching the CPU. `-> pcap: 0 [PAUSED]` = writing to the *file*
 hasn't started (marking and forwarding never pause — only the file writing does).
 
-**Step 3 — start writing and grab a few seconds.** Press **SPACE** in the program's terminal (or, from
-another shell, `sudo kill -USR1 <pid>`); the `[PAUSED]` disappears and `-> pcap:` climbs. After a few
+**Step 3 — start writing and grab a few seconds.** Press **SPACE** in the program's terminal; the `[PAUSED]` disappears and `-> pcap:` climbs. After a few
 seconds, stop the program with **Ctrl-C** — that flushes and closes the file cleanly.
 
 **Step 4 — see your mark.** Open the capture with `tcpdump`:

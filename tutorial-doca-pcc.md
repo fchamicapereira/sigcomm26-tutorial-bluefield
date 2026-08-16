@@ -32,8 +32,8 @@ We build up in three parts:
 
 - **Part A** — *where* the algorithm runs: the two halves (a host program that loads it, and the DPA
   that runs it), and how a "rate" is expressed.
-- **Part B** — *how* the controller thinks: the event loop and the three reactions that make up a
-  DCQCN-style loop — two of which you'll write.
+- **Part B** — *how* the controller thinks: the event loop and the two reactions that make up a
+  DCQCN-style loop — both of which you'll write.
 - **Part C** — fill in the two reactions one at a time: **TODO 1** (the cut) and watch the rate
   collapse, then **TODO 2** (the recovery) and watch the sawtooth; then tune how hard it reacts.
 
@@ -129,12 +129,13 @@ It opens the PCC context, uploads your DPA program, and then waits for events. W
 just sits there — that's expected; a controller with nothing to react to has nothing to do.
 
 **Step 3 — give it something to see.** In **other terminals** (leave the controller running), start
-the Part I marker (so packets are CE-marked and the receiver sends CNPs) and run a flow — the
-loopback is already up from Part I:
+the Part I marker (so packets are CE-marked and the receiver sends CNPs), then drive traffic with
+`benchmark.sh` — the loopback is already up from Part I:
 ```bash
-sudo ./build/doca-flow/doca_flow_ecn_pcap -- --percent 100   # from Part I: mark every packet
-./run_server.sh   # in one terminal
-./run_client.sh   # in another
+# in a doca-2 terminal — the Part I marker: CE-mark every packet
+sudo ./build/doca-flow/doca_flow_ecn_pcap -- --percent 100
+# in another terminal (from the repo root) — runs server + client together, with a live throughput chart
+./scripts/benchmark.sh
 ```
 
 **What you should see.** Back in the controller's terminal: now that traffic is flowing, its own
@@ -166,29 +167,25 @@ half** — the loader and supervisor — and you won't edit it, but following it
 where *your* code (the DPA half) gets plugged in and takes over. It all lives in
 [`host/pcc_ecn_rp.c`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c):
 
-1. **Catch Ctrl-C**, so stopping is graceful: `SIGINT` sets a flag that ends the loop in step 8 and
-   runs the cleanup in step 9. (This is *why* Ctrl-C is the right way to stop it.)
-2. **Read the two flags** — `-d <device>` (which NIC, e.g. `mlx5_1`) and `-l <level>` (log verbosity).
-3. **Open that device** —
+1. **Read the two flags** — `-d <device>` (which NIC, e.g. `mlx5_1`) and `-l <level>` (log verbosity).
+2. **Open that device** —
    [`open_pcc_device()`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L103) finds the IB device with that
    name that *supports PCC*, and opens it.
-4. **Create a PCC context** on the device — `doca_pcc_create()`.
-5. **Attach your algorithm** —
+3. **Create a PCC context** on the device — `doca_pcc_create()`.
+4. **Attach your algorithm** —
    [`doca_pcc_set_app(pcc, pcc_ecn_rp_app)`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L182). That
    `pcc_ecn_rp_app` is the **compiled DPA image**, built from `device/rp_main.c` + your
    `device/algo/rtt_template.c` — this single line is where the code you write gets loaded in.
-6. **Configure it** — the DPA thread pool, the CNP probe format (plain RoCE CNP), logging/coredump.
-7. **Start it** —
+5. **Configure it** — the DPA thread pool, the CNP probe format (plain RoCE CNP), logging/coredump.
+6. **Start it** —
    [`doca_pcc_start(pcc)`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L211) uploads your algorithm onto the
    NIC's DPA and sets it running. **From this moment the DPA is in charge:** every congestion event
    runs your code.
-8. **Supervise** — the host then just loops in
-   [`doca_pcc_wait()`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L219), checking the process stays
+7. **Supervise** — the host then just loops in
+   [`doca_pcc_wait()`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L231), checking the process stays
    healthy and otherwise doing nothing. All the real per-event work is on the DPA now.
-9. **On Ctrl-C** — the loop ends and it tears everything down (`doca_pcc_stop` → `doca_pcc_destroy` →
-   close the device).
 
-Steps 1–6 are setup, **step 7 is the handoff**, and step 8 is the host getting out of the way.
+Steps 1–5 are setup, **step 6 is the handoff**, and step 7 is the host getting out of the way.
 Everything from here on — the part you actually write — runs on the DPA, once per event. That is what
 the rest of Part B is about.
 
@@ -202,10 +199,9 @@ flow's saved state, the event, and a `results` struct — you set the new rate b
 
 - a **packet was sent** (a "TX" event),
 - a **CNP arrived** — a Congestion Notification Packet, the receiver's way of saying "I got a
-  CE-marked packet, you are causing congestion" (this is the mark you set in Part I, echoed back),
-- an **RTT** measurement came in (a round-trip-time sample).
+  CE-marked packet, you are causing congestion" (this is the mark you set in Part I, echoed back).
 
-> **INFO — the NIC batches events for you.** At 100 Gb/s the DPA could never keep up with one event
+> **INFO — the NIC batches events for you.** At line rate the DPA could never keep up with one event
 > per packet, so the hardware **coalesces** them: one event stands for many packets. That is what
 > keeps the algorithm fast enough — it reacts per *batch*, while the hardware rate limiter does the
 > per-packet work.
@@ -227,7 +223,6 @@ code you'll write (`TODO 1`), and where the other events land:
       │
       ├─ ev_type == ROCE_TX   →  rtt_template_handle_roce_tx()    ← TODO 2 (raise the rate)
       ├─ ev_type == ROCE_CNP  →  rtt_template_handle_roce_cnp()   ← TODO 1 (cut the rate)  ★ this one
-      ├─ ev_type == RTT       →  rtt_template_handle_roce_rtt()   ← given  (ignores the rate)
       └─ new flow / NACK / …  →  handled for you
                 │
                 ▼   your handler writes results->rate
@@ -235,21 +230,21 @@ code you'll write (`TODO 1`), and where the other events land:
 ```
 <!-- AUTHOR: for the HTML artifact, replace this ASCII block with an SVG/mermaid diagram. -->
 
-So each of the three reactions below is just the body of one of those `..._handle_roce_*` functions
+So each of the two reactions below is just the body of one of those `..._handle_roce_*` functions
 — the dispatch that gets you there is already written.
 
-### The three reactions
+### The two reactions
 
 Our controller is a textbook **DCQCN** loop — the classic "additive-increase / multiplicative-
-decrease" pattern. All of it lives in three short handlers in
-[`rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c), and each does one thing. **Two of
+decrease" pattern. All of it lives in two short handlers in
+[`rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L450), and each does one thing. **Both of
 them are left blank for you** — that's the exercise — so below we describe exactly what each must do
 and the pieces you build it from. You'll write them in Part C; here, just take in the shape.
 
 **1. A CNP arrives → cut the rate (multiplicative decrease). ← you write this, `TODO 1`.**
 Congestion is happening, so the rate must come **down** by a fixed factor, and never fall below a
 floor. It goes in
-[`..._handle_roce_cnp()`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c), at the marker `TODO 1`.
+[`..._handle_roce_cnp()`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375), at the marker `TODO 1`.
 The pieces, all already there for you:
 - `cur_rate` — the flow's current rate (the fixed-point number from Part A); you edit it in place.
 - `ECN_CNP_DEC_FACTOR` — the cut factor, ×0.90 by default (a `#define` at the top of the file).
@@ -260,25 +255,21 @@ The pieces, all already there for you:
 `TODO 2`.** When traffic is moving and nothing is cutting it, the rate should **drift back up** —
 gently, and only occasionally, so it doesn't overshoot and immediately re-trigger congestion. It
 goes in
-[`..._handle_roce_tx()`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c), at the marker `TODO 2`.
+[`..._handle_roce_tx()`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L218), at the marker `TODO 2`.
 The pieces:
 - a `static` counter, so you act only every ~1000th call rather than on every single send event;
 - `AI >> 2` — a small step to add each time, about 1.25% of line rate;
 - `RATE_MAX` — the ceiling the rate must not exceed.
 
-**3. An RTT sample arrives → do nothing to the rate. (already written for you.)** This is what makes
-our controller *pure-ECN*: the round-trip time is measured but is **not** used to steer the rate
-(that path is left disabled in
-[`..._handle_roce_rtt()`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c)). Rate is driven by CNPs
-and TX only — the two reactions you're about to write.
-
-Put together, that is the DCQCN **sawtooth**: every CNP knocks the rate down by 10%, and between CNPs
+Those two reactions are the entire controller: it steers the rate on the ECN signal alone (the CNPs)
+— which is what *pure-ECN* means. Put together, they make the DCQCN **sawtooth**: every CNP knocks
+the rate down by 10%, and between CNPs
 it drifts back up ~1.25% at a time. When the network is congested, the down-cuts win and the rate
 settles low; when congestion clears (no more CNPs), the rate climbs back to full.
 
 > **INFO — the one knob that changes its personality.** The decrease factor is a single constant at
 > the top of the file,
-> [`ECN_CNP_DEC_FACTOR`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L45):
+> [`ECN_CNP_DEC_FACTOR`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L54):
 > ```c
 > #define ECN_CNP_DEC_FACTOR (((1 << 16) * 900) / 1000)  // ×0.90 per CNP; 800..995 = ×0.80..×0.995
 > ```
@@ -289,14 +280,14 @@ settles low; when congestion clears (no more CNPs), the rate climbs back to full
 
 ## Part C — Write the two reactions, then watch it work
 
-The controller is **almost complete**: the event loop, the RTT handler, the logging, and the whole
+The controller is **almost complete**: the event loop, the logging, and the whole
 host loader are done. **The two reactions that actually move the rate are left for you** — the ones
 you studied in Part B:
 
 - **`TODO 1`** — cut the rate when a CNP arrives (multiplicative decrease), in `..._handle_roce_cnp()`
 - **`TODO 2`** — raise the rate when things are quiet (additive increase), in `..._handle_roce_tx()`
 
-Both are marked in [`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c). As
+Both are marked in [`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375). As
 shipped they're empty, so the controller **builds and runs but never changes the rate** — a flow
 sends flat-out no matter how congested the link is. You'll add them one at a time and watch each half
 of the loop come alive.
@@ -322,12 +313,12 @@ makes it react.
 
 **Step 1 — get the flow running, and note the baseline.** Bring the same setup back up as in the
 [Part A checkpoint](#build-it-and-run-it-once) — the Part I marker at `--percent 100` and
-`run_server.sh` / `run_client.sh` — and note the client's BW average (e.g. ~92 Gb/s, "full speed").
+`./scripts/benchmark.sh` — and note the baseline throughput on its chart (~92 Gb/s, "full speed").
 As you saw there, with `TODO 1` still empty the rate sits flat and the BW doesn't budge. Leave the
 traffic and marker running while you edit.
 
 **Step 2 — write `TODO 1`.** Open
-[`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c) and find `TODO 1` in
+[`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375) and find `TODO 1` in
 `..._handle_roce_cnp()`. Using the pieces from Part B — `doca_pcc_dev_fxp_mult()`,
 `ECN_CNP_DEC_FACTOR`, `cur_rate`, `MIN_RATE` — make the rate come **down** by the cut factor on each
 CNP, then clamp it up to the floor so it can't go below `MIN_RATE`. It's two lines. (Stuck? The
@@ -436,7 +427,7 @@ point; too sharp and you under-use the link.
 
 <br>
 
-Open [`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c) and change the
+Open [`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L54) and change the
 `900` in `ECN_CNP_DEC_FACTOR` (near the top of the file). Try a gentler reaction first, rebuild, and
 re-run Stage 1:
 ```c
@@ -463,21 +454,6 @@ Put `900` back when you're done to restore the tuned controller.
 
 </details>
 
-### Going further (optional) — react to *how much* congestion
-
-Because the NIC coalesces CNPs, one CNP *event* can stand for many CNPs — and your `TODO 1` cuts the
-rate **once per event**, regardless. You can make the controller react in proportion to the
-congestion by reading how many CNPs were folded into the event and cutting once per real CNP. In
-`..._handle_roce_cnp()`, in place of your single cut:
-
-```c
-uint32_t n = doca_pcc_dev_get_ack_nack_cnp_extra(event).num_coalesced;  // how many CNPs this event
-for (uint32_t i = 0; i < n && cur_rate > MIN_RATE; i++)
-    cur_rate = doca_pcc_dev_fxp_mult(ECN_CNP_DEC_FACTOR, cur_rate);      // cut once per real CNP
-```
-
-Rebuild, run, and compare the throughput and CNP counts against the flat "once per event" version.
-
 ---
 
 ## What you built (and saw)
@@ -485,8 +461,7 @@ Rebuild, run, and compare the throughput and CNP counts against the flat "once p
 - The **two-halves** model: a host loader ships your algorithm onto the **DPA**, which runs it once
   per event and sets a per-flow **rate** that the NIC hardware then enforces.
 - The two reactions **you wrote** — `TODO 1` (CNP → cut ×0.90) and `TODO 2` (TX → raise ~1.25%) —
-  which, together with the given RTT handler that ignores the rate, make a complete **DCQCN**
-  sawtooth.
+  which together make a complete **DCQCN** sawtooth.
 - **Congestion control happening live**: with only the cut written, a flow's throughput collapsing as
   the controller reacts to the CE marks you produced in Part I; with the recovery added too, the rate
   climbing back when congestion clears.
@@ -516,7 +491,7 @@ Rebuild, run, and compare the throughput and CNP counts against the flat "once p
   the foreground keeps it attached and visible.
 - **An edit to the algorithm didn't take effect** → the DPA image is built at *configure* time, so do
   a clean rebuild: `rm -rf build && meson setup build && ninja -C build`.
-- **Traffic must use `-R`** (`run_client.sh`/`run_server.sh` already do). Without it, the flow isn't
+- **Traffic must use `-R`** (`benchmark.sh` and `run_{server,client}.sh` already do). Without it, the flow isn't
   bound to your algorithm and your handlers never run — the rate won't move at all.
 
 ---
@@ -547,11 +522,6 @@ line rate.
 The rate is a *set-point*; the throughput you get also depends on queueing and retransmissions. A
 controller can hold a similar average rate yet deliver very different goodput — which is what the
 Stage 2 sweep shows.
-
-**Can I go back to the stock, RTT-based controller?**
-Yes — the original logic is still in the file, dormant. Uncomment the `algorithm_core(...)` call in
-[`..._handle_roce_rtt()`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L346) and rebuild to compare
-RTT-based control against the pure-ECN version.
 
 ---
 
