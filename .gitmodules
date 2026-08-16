@@ -1,4 +1,4 @@
 [submodule "doca-3/pcc-path-steering"]
 	path = doca-3/pcc-path-steering
 	url = https://github.com/tylerliu/pcc-path-steering.git
-	branch = doca-2-port
+	branch = master
