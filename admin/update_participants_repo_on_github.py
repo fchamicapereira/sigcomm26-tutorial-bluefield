@@ -28,7 +28,7 @@ Layout it produces:
     doca-3/                       ditto for the DOCA 3 tree (pcc only if it has a template)
     tutorial-doca-flow.md         Part I hands-on guide (Markdown; flow filename rewritten)
     tutorial-doca-pcc.md          Part II hands-on guide (Markdown)
-    guides/*.pdf                  the rendered guides only, no LaTeX (see GUIDES)
+    *.pdf                         the rendered guides, at the ROOT (see GUIDES)
     scripts/                      run_server.sh, run_client.sh, benchmark.sh, check_ecn_bits...
     .vscode/                      IntelliSense paths for the DOCA/DPDK headers on the card
     .clang-format
@@ -72,6 +72,11 @@ SCRIPTS = ["run_server.sh", "run_client.sh", "benchmark.sh", "check_ecn_bits_fro
 # and the figures stay here -- participants get the PDF and nothing else, which is why this is a
 # list of built artefacts rather than a directory copy. Run `make -C guides` first: this script
 # does NOT build them, and copying a stale PDF is silent.
+#
+# They land at the ROOT of the participant repo, not in a guides/ subdirectory: a participant who
+# has just cloned should see the thing they are meant to read without opening a folder first, and
+# the two tutorial-*.md guides are already there. "guides" stays in MANAGED so an earlier
+# checkout's guides/ directory is deleted rather than left behind holding stale copies.
 GUIDES = ["tailscale.pdf", "doca-flow.pdf"]
 
 # Participant-only files kept here as real files rather than generated inline, so they can be
@@ -91,9 +96,10 @@ TUTORIAL_GUIDES = {
 
 # Top-level directories this script owns. Anything else in the participant repo survives a run.
 #
-# The doca-N-solutions/ names are still listed although nothing writes them any more: MANAGED is
-# what gets deleted before each rebuild, so keeping them here is what removes the solution
-# directories an earlier sync left behind. Drop them once no participant checkout has them.
+# Some entries here are no longer written by anything: doca-N-solutions/ (solutions stopped
+# shipping) and guides/ (the PDFs moved to the root). MANAGED is what gets DELETED before each
+# rebuild, so listing them is exactly what removes those directories from a checkout made before
+# the change. Drop them once no participant checkout has them.
 MANAGED = [f"{v}{suffix}" for v in VERSIONS for suffix in ("", "-solutions")] + [
     "guides",
     "scripts",
@@ -315,7 +321,7 @@ def main():
         src = REPO / "guides" / guide
         if not src.exists():
             sys.exit(f"guides/{guide} has not been built -- run: make -C guides")
-        copy(src, dest / "guides" / guide, changes, args.dry_run)
+        copy(src, dest / guide, changes, args.dry_run)
     for script in SCRIPTS:
         src = REPO / script
         dst = dest / "scripts" / script
