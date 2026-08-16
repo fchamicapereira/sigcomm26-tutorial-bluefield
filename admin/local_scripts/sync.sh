@@ -96,7 +96,14 @@ else
 		fi
 
 		branch=$(git_t rev-parse --abbrev-ref HEAD)
-		[ "$branch" = "$BRANCH" ] || die "on branch '$branch', expected '$BRANCH'; re-run with --force"
+		if [ "$branch" != "$BRANCH" ]; then
+			echo "switching clean checkout from $branch to $BRANCH"
+			if git_t show-ref --verify --quiet "refs/heads/$BRANCH"; then
+				git_t checkout "$BRANCH"
+			else
+				git_t checkout --track -b "$BRANCH" "origin/$BRANCH"
+			fi
+		fi
 
 		git_t merge --ff-only "origin/$BRANCH"
 		after=$(git_t rev-parse HEAD)

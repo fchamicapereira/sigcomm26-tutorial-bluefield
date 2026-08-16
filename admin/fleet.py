@@ -49,7 +49,6 @@ SCRIPTS_DIR = ADMIN_DIR / "local_scripts"
 # Cloned over HTTPS rather than SSH: the repo is public, and putting deploy keys on a dozen
 # shared lab boxes with a published password would be a bad trade.
 REPO_URL = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield.git"
-BRANCH = "main"
 TUTORIAL_USER = "s26t"
 
 # Set by local_scripts/setup_tutorial_user.sh and handed to the participants anyway, so there is
@@ -325,13 +324,25 @@ def summarize(results: list[Result]) -> int:
     return 0
 
 
+def current_checkout_branch() -> str:
+    result = subprocess.run(
+        ["git", "-C", str(ADMIN_DIR.parent), "symbolic-ref", "--quiet", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        sys.exit("the controller checkout has a detached HEAD; pass sync --branch explicitly")
+    return result.stdout.strip()
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     machines = load_inventory(INVENTORY, args.machines)
-    script_args = ["--repo", REPO_URL, "--branch", BRANCH, "--user", TUTORIAL_USER]
+    branch = args.branch or current_checkout_branch()
+    script_args = ["--repo", REPO_URL, "--branch", branch, "--user", TUTORIAL_USER]
     if args.force:
         script_args.append("--force")
 
-    print(f"sync: {BRANCH} -> {len(machines)} machine(s)" f"{' (--force: local changes will be discarded)' if args.force else ''}")
+    print(f"sync: {branch} -> {len(machines)} machine(s)" f"{' (--force: local changes will be discarded)' if args.force else ''}")
 
     results = run_fleet(
         machines,
@@ -728,7 +739,11 @@ def main() -> int:
             "that is usually somebody's exercise work; --force discards it."
         ),
     )
-    sync.add_argument("--force", action="store_true", help="reset --hard to origin/%s, discarding local changes" % BRANCH)
+    sync.add_argument(
+        "--branch",
+        help="branch to check out on targets (default: this controller checkout's current branch)",
+    )
+    sync.add_argument("--force", action="store_true", help="reset --hard to the selected origin branch, discarding local changes")
     sync.set_defaults(func=cmd_sync)
 
     doca = subparsers.add_parser(
