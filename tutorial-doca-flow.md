@@ -9,7 +9,7 @@
 
   Author notes are in HTML comments; delete before publishing. Search "AUTHOR:" for open items.
   Line-links assume this file sits at the repo root. Expected outputs: the ib_write_bw table and the
-  "CE marked:" lines are real; the doca_flow_nop banner and sample list are illustrative —
+  "CE marked:" lines are real; the doca_flow_ecn_pcap banner and sample list are illustrative —
   AUTHOR: replace with real pastes + terminal screenshots.
 -->
 
@@ -24,8 +24,8 @@ You do **not** need any prior BlueField, DOCA, or C experience. We explain each 
 build up one small piece at a time:
 
 - **Part A** — the card, its two-port loopback, and how to put real traffic on it.
-- **Part B** — meet DOCA Flow, then walk through a small, *complete* program that forwards packets,
-  so the pieces are familiar before you write any.
+- **Part B** — meet DOCA Flow, then write your first pipe: the root pipe that makes a small, complete
+  program forward packets, so the idiom is in your hands before Part C.
 - **Part C** — extend a scaffolded program to mark packets with a congestion signal — the signal the
   controller you build in Part II reacts to. You do it in two stages: first make the NIC *mark*
   packets, then *capture* a copy so you can see the mark.
@@ -149,7 +149,7 @@ card's line rate:
  #bytes     #iterations   BW peak[Gb/sec]   BW average[Gb/sec]   MsgRate[Mpps]
  65536      529037          0.00              92.46                0.176344
 ```
-That **~92 Gb/s** is your proof the whole path works end to end: sender → `p1` → cable → `p0` → the
+Hitting **line rate** is your proof the whole path works end to end: sender → `p1` → cable → `p0` → the
 eSwitch → receiver. If you see a table with a real number, Part A is done.
 
 > You just ran the server and client by hand to see the moving parts. From here on you don't have
@@ -162,7 +162,7 @@ eSwitch → receiver. If you see a table with a real number, Part A is done.
 
 ---
 
-### Part B — Meet DOCA Flow, then walk through a working forwarder
+### Part B — Meet DOCA Flow, then write your first pipe
 
 #### What DOCA Flow is
 
@@ -207,22 +207,16 @@ below is exact and works as typed — starting with our minimal forwarder, next.
 
 #### How our minimal forwarder works
 
-You don't start from a blank file — we walk through a working example first, so the pieces feel
-familiar when you build your own in Part C. The example is our minimal forwarder, `doca_flow_nop`.
-All it does is **forward**: packets arriving from the wire are handed to the receiver, the receiver's
-replies are sent back out the wire, and nothing about the packets changes (`nop` = "no operation").
+You don't start from a blank file. The program you build on —
+[`doca_flow_ecn_pcap.c`](doca-2/doca-flow/doca_flow_ecn_pcap.c) — is **a plain forwarder**: packets
+arriving from the wire are handed to the receiver, the receiver's replies go back out the wire, and
+nothing about the packets changes. It ships **almost** complete — every pipe is written for you
+*except the root pipe*, `create_root_pipe`, which is the one piece **you** write here in Part B.
+Fill it in and traffic flows at line rate, unmarked; turning that forwarder into an ECN marker is
+then the whole of Part C. First, though, meet the two-step idiom every pipe is built from — the same
+one you are about to use.
 
-It is the smallest complete DOCA Flow program: **one pipe with two entries**, one per direction. The
-pipe matches only on *which port a packet arrived on* (`parser_meta.port_meta`), and each entry
-forwards to the other port:
-
-- **Entry 1** — a packet from the wire (port 0) → forward to the receiver SF (port 1).
-- **Entry 2** — a reply from the receiver SF (port 1) → forward back out the wire (port 0).
-
-Both are plain **forward-to-port** entries — nothing in the packet changes.
-
-What matters most is its **shape**, because the file you edit in Part C
-([`doca_flow_ecn_pcap.c`](doca-2/doca-flow/doca_flow_ecn_pcap.c)) is built the *exact same way*:
+Its **shape is the shape of the whole program**:
 
 ```
 main()
@@ -231,95 +225,126 @@ main()
   └─ loop: report the forwarded-packet counts, once a second
 ```
 
-In `doca_flow_nop` that pipeline is a single `create_root_pipe()`; in Part C it grows into a handful
-of `create_*` pipes. Everything around it — how the program starts, opens the card, and takes over
-the eSwitch — is identical. So once this forwarder makes sense, you already know your way around the
-file you are about to edit.
+As shipped, [`build_pipeline()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L837) wires up **two** pipes —
+the whole no-op data path:
 
-Here is how [`create_root_pipe()`](doca-2/doca-flow/doca_flow_nop.c) actually does it — worth reading
-once, because **every pipe in Part C is built the same two steps**: first you *build the pipe*, then
-you *add entries* to it. (Error checks trimmed for clarity.)
+- **[`create_root_pipe()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L782)** — the **root**: every packet
+  is checked here first, sorted by *which port it arrived on* (`parser_meta.port_meta`). From the
+  wire → on to the forwarding pipe; back from the receiver SF → straight out the wire. **This is the
+  one you write, in the steps below** — it ships with its two halves left as `TODO`s.
+- **[`create_passthrough_pipe()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L621)** — the **forwarding
+  pipe** (given): matches IPv4 and forwards to the receiver SF, unchanged; the smallest complete
+  instance of the five-step shape every pipe in the file follows.
+
+In Part C this same `build_pipeline()` grows into a handful of `create_*` pipes. Everything around it
+— how the program starts, opens the card, and takes over the eSwitch — is identical, so once this
+forwarder makes sense you know your way around the file you are about to edit.
+
+Here is the two-step idiom you'll use to write
+[`create_root_pipe()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L782) — and **every pipe in Part C is
+built the same two steps**: first you *build the pipe*, then you *add entries* to it. (Error checks
+trimmed for clarity.)
 
 **Step 1 — build the pipe (the template).** A pipe declares *which field it matches on* and *what it
 does with a match* — but not the concrete values; those come from the entries. This one matches on
-the arrival port, forwards (to a port each entry will name), and counts:
+the arrival port and forwards to a target each entry will name:
 
 ```c
-match.parser_meta.port_meta = UINT32_MAX;   // the field this pipe matches on (0xFF… = "look at this")
-struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_CHANGEABLE};   // where to send — set per entry
-struct doca_flow_monitor monitor = {.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED};  // count hits
-
-doca_flow_pipe_cfg_create(&cfg, port);
-doca_flow_pipe_cfg_set_is_root(cfg, true);   // every packet is checked against this pipe first
-doca_flow_pipe_cfg_set_nr_entries(cfg, 2);   // it will hold two entries, one per direction
-doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask);
-doca_flow_pipe_cfg_set_monitor(cfg, &monitor);
-doca_flow_pipe_create(cfg, &fwd, &fwd_miss, &pipe);   // fwd_miss = DROP anything that matches nothing
+// match, match_mask, fwd_hit, fwd_miss and pipe are already declared for you.
+match.parser_meta.port_meta      = UINT32_MAX;   // match on the arrival port …
+match_mask.parser_meta.port_meta = UINT32_MAX;   // … comparing that field exactly (full mask)
+fwd_hit.type  = DOCA_FLOW_FWD_CHANGEABLE;        // where a match goes — each entry names it
+fwd_miss.type = DOCA_FLOW_FWD_DROP;              // anything matching nothing → dropped
+doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask);   // teach the cfg what to match on
+doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe);   // build the pipe
 ```
 
 **Step 2 — add the entries (the values).** A freshly built pipe does nothing until you add entries.
-Each one fills in the values the pipe left open — *which* port to match, and *which* port to forward
-to:
+Each one fills in the values the pipe left open — *which* port to match, and *where* to forward:
 
 ```c
-// arrived on port 0 (the wire)  ->  forward to port 1 (the receiver SF)
-entry_match.parser_meta.port_meta = 0;
-entry_fwd = (struct doca_flow_fwd){.type = DOCA_FLOW_FWD_PORT, .port_id = 1};
-doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, &monitor, &entry_fwd,
-                         DOCA_FLOW_WAIT_FOR_BATCH, &status, &to_sf);
+// install_status, entry, entry_match and entry_fwd are already declared for you.
 
-// arrived on port 1 (the SF)    ->  forward back out port 0 (the wire)
-entry_match.parser_meta.port_meta = 1;
-entry_fwd = (struct doca_flow_fwd){.type = DOCA_FLOW_FWD_PORT, .port_id = 0};
-doca_flow_pipe_add_entry(0, pipe, &entry_match, NULL, &monitor, &entry_fwd,
-                         /* flush the batch */ 0, &status, &to_wire);
+// from the wire (PF_PORT_ID)  ->  on to the forwarding pipe (wire_target)
+entry_match.parser_meta.port_meta = PF_PORT_ID;
+entry_fwd.type = DOCA_FLOW_FWD_PIPE;
+entry_fwd.next_pipe = wire_target;
+doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &entry_match, NULL, NULL, &entry_fwd,
+                         DOCA_FLOW_WAIT_FOR_BATCH, &install_status, &entry);
 
-doca_flow_entries_process(port, 0, 10000, 2);   // install both entries into the NIC
+// from the receiver SF (SF_REP_PORT_ID)  ->  back out the wire (PF_PORT_ID)
+entry_match.parser_meta.port_meta = SF_REP_PORT_ID;
+memset(&entry_fwd, 0, sizeof(entry_fwd));   // reuse the struct — clear it first
+entry_fwd.type = DOCA_FLOW_FWD_PORT;
+entry_fwd.port_id = PF_PORT_ID;
+doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &entry_match, NULL, NULL, &entry_fwd,
+                         DOCA_FLOW_NO_WAIT, &install_status, &entry);
+
+doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries);   // install both
 ```
 
-> **INFO — the one idiom you'll reuse for every pipe:** the **pipe** says *which* fields it looks at,
-> and that it forwards and counts; each **entry** supplies the *values* — the port to match and the
-> port to send to. **Pipe = which fields · entry = what values.** (`0xFF…` in the pipe's match means
-> "this field participates"; the entry gives the real number.)
+> **INFO — the one idiom you'll reuse for every pipe:** the **pipe** says *which* fields it looks at
+> and that it forwards; each **entry** supplies the *values* — the port to match and where to send.
+> **Pipe = which fields · entry = what values.** (`0xFF…` / `FWD_CHANGEABLE` in the pipe means "an
+> entry fills this in"; the entry gives the real value — and a forward target can be a **pipe** or a
+> **port**.)
 
 > **NOTE — the single most important idea in this whole tutorial:** the instant a DOCA Flow program
 > starts, **it takes ownership of the eSwitch**. From then on, the NIC forwards *only* what your
 > program's pipes say to forward. Nothing moves unless your rules move it. Keep this in mind — it
-> explains everything you are about to see.
+> explains everything you are about to see, starting with why an unfinished `create_root_pipe`
+> forwards nothing at all.
 
 <details>
-<summary><b>Try it yourself! — compile and run the forwarder</b></summary>
+<summary><b>Try it yourself! — write the root pipe, then compile and run the forwarder</b></summary>
 
 <br>
 
-**Step 1 — build it.** Go to the source folder for your card's DOCA version (`doca-2` here) and
+**Step 1 — write `create_root_pipe`.** Open
+[`create_root_pipe()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L782). Everything mechanical is already
+there — the cfg boilerplate (`cfg_create`, name/type/domain, `set_is_root`, `set_nr_entries`), the
+teardown, **and every struct you need is already declared for you** (`match`, `match_mask`,
+`fwd_hit`, `fwd_miss`, `pipe`; then `install_status`, `entry`, `entry_match`, `entry_fwd`). You only
+fill in the fields and the calls, in two `TODO` gaps:
+
+- [**`TODO` — Part B, Step 1**](doca-2/doca-flow/doca_flow_ecn_pcap.c#L802) — *build the pipe*: set
+  the fields on `match`/`match_mask`/`fwd_hit`/`fwd_miss`, then `set_match` and
+  `doca_flow_pipe_create`. (Copy the **Step 1** snippet above.)
+- [**`TODO` — Part B, Step 2**](doca-2/doca-flow/doca_flow_ecn_pcap.c#L815) — *add the entries*: fill
+  in and install the two entries — wire → `wire_target` (`WAIT_FOR_BATCH`); receiver SF → the uplink
+  port (`NO_WAIT`); then `doca_flow_entries_process`. (Copy the **Step 2** snippet above.)
+
+Copy each snippet into its gap. Until you do, the program builds but forwards nothing.
+
+**Step 2 — build it.** Go to the source folder for your card's DOCA version (`doca-2` here) and
 compile with `meson` (which configures the build) and `ninja` (which does the compiling):
 ```bash
 cd doca-2
 meson setup build && ninja -C build
 ```
-This produces the program at `build/doca-flow/doca_flow_nop`. (You only need `meson setup build` the
-first time; after editing code, just `ninja -C build` again.)
+This produces the program at `build/doca-flow/doca_flow_ecn_pcap`. (You only need `meson setup build`
+the first time; after editing code, just `ninja -C build` again.)
 
-**Step 2 — run it (leave it running in Terminal 1).**
+**Step 3 — run your forwarder (leave it running in Terminal 1).**
 ```bash
-sudo ./build/doca-flow/doca_flow_nop
+sudo ./build/doca-flow/doca_flow_ecn_pcap
 ```
-It prints some start-up lines and then a forwarded-packet count once a second.
-<!-- AUTHOR: paste the real doca_flow_nop start-up banner + a couple of counter lines here. -->
+With `create_root_pipe` filled in it is the plain forwarder — it prints its start-up lines and then
+sits forwarding. (Run it *without* writing the root pipe and it starts but forwards nothing: the
+eSwitch is yours, but you've given it no root to route from.)
+<!-- AUTHOR: paste the real as-shipped doca_flow_ecn_pcap start-up banner here. -->
 
-**Step 3 — send traffic through it (Terminals 2 and 3).** Same two commands as Part A:
+**Step 4 — send traffic through it (Terminal 2).**
 ```bash
-sudo ip netns exec ns0 ib_write_bw -d mlx5_2 -R -x 1 -F --report_gbits            # server
-sudo ip netns exec ns1 ib_write_bw -d mlx5_3 -R -x 1 -F 10.0.0.1 --report_gbits   # client
+./scripts/benchmark.sh
 ```
-**You should see** the same ~90 Gb/s table as before — but now every packet is being forwarded by
-*your program's* pipes, and `doca_flow_nop`'s per-second counter climbs along with it.
+**You should see** the same **line rate** as in Part A — but now every packet is being forwarded by *your
+program's* pipes.
 
-**Step 4 — see who is in charge.** Press **Ctrl-C** in Terminal 1 to stop `doca_flow_nop`, then run
-the traffic again: it still works, now over the card's *default* forwarding. Start `doca_flow_nop`
-again and it flows through your pipes instead. That switch — default path vs. *your* path — is
-exactly the control you will use in Part C.
+**Step 5 — see who is in charge.** Press **Ctrl-C** in Terminal 1 to stop the program, then run the
+traffic again: it still works, now over the card's *default* forwarding. Start it again and it flows
+through your pipes instead. That switch — default path vs. *your* path — is exactly the control you
+will use in Part C.
 
 </details>
 
@@ -335,10 +360,12 @@ normally.
 > through congestion."* It is the alarm a congestion-control algorithm listens for. In Part II you
 > write the algorithm that *reacts* to CE; here you write the code that *sets* it.
 
-You start from [`doca_flow_ecn_pcap.c`](doca-2/doca-flow/doca_flow_ecn_pcap.c): the **complete
-program with the pipeline removed**. Everything hard and unrelated — setting up the device, parsing
-arguments, the loop that writes a capture file, the counter report — is already written and you do
-not touch it. You fill in **four** short functions, marked `TODO 1`–`TODO 4`.
+You start from [`doca_flow_ecn_pcap.c`](doca-2/doca-flow/doca_flow_ecn_pcap.c): a **complete, working
+forwarder** — the same no-op program you ran in Part B. Everything hard and unrelated — setting up
+the device, parsing arguments, the loop that writes a capture file, the counter report — is already
+written and you do not touch it. To turn it into an ECN marker you **flip `build_pipeline()` from its
+no-op wiring to the ECN pipeline** (comment one line, uncomment a block) and fill in **three** short
+functions, marked `TODO 1`–`TODO 3`.
 
 #### The structure of `doca_flow_ecn_pcap.c`
 
@@ -346,7 +373,7 @@ The program already handles everything around the pipeline for you — opening t
 DOCA Flow init, argument parsing (`--percent`, `--pcap`, `--sample`), the packet-capture loop, the
 per-second counter report, and `main()`. **What you write is the pipeline itself** — a small set of
 **pipe-builder functions** near the bottom of the file. Two are worked examples to model yours on;
-four are the ones you fill in:
+three are the ones you fill in:
 
 ```
 doca_flow_ecn_pcap.c
@@ -354,17 +381,19 @@ doca_flow_ecn_pcap.c
 
   create_passthrough_pipe()     given    the 5-step pipe shape — your template for the rest
   create_to_cpu_pipe()          given    where captured copies go (used in Stage 2)
-  create_root_pipe()            TODO 1   the root: sort packets by the port they arrived on → Stage 1
-  create_forward_to_sf_pipe()   TODO 2   mark each packet CE, forward to the receiver       → Stage 1
-  bind_capture_mirror()         TODO 3   mirror a copy of each packet to the CPU            → Stage 2
-  create_sampling_pipe()        TODO 4   mark only a fraction of packets                    → optional
-  build_pipeline()              given    wires the pipes above together
+  create_root_pipe()            Part B   the root you wrote in Part B: sorts by arrival port
+  create_forward_to_sf_pipe()   TODO 1   mark each packet CE, forward to the receiver       → Stage 1
+  bind_capture_mirror()         TODO 2   mirror a copy of each packet to the CPU            → Stage 2
+  create_sampling_pipe()        TODO 3   mark only a fraction of packets                    → optional
+  build_pipeline()              given*   wires the pipes together — you flip it from no-op to ECN
 ```
 <!-- AUTHOR: for the HTML artifact, replace this ASCII block with a nicer figure. -->
 
-The `TODO`s are numbered **in the order you fill them in**: Stage 1 is `TODO 1` (the root) and
-`TODO 2` (marking), Stage 2 adds `TODO 3` (capture), and `TODO 4` is the optional sampler. (In the
-file each `TODO` sits with the function it belongs to, so their positions run in a different order.)
+`build_pipeline()` ships wired as the **no-op forwarder** from Part B; your first move in Stage 1 is
+to switch it to the ECN pipeline (comment out one line, uncomment the block under it). The three
+`TODO`s are numbered **in the order you fill them in**: `TODO 1` (marking) in Stage 1, `TODO 2`
+(capture) in Stage 2, and `TODO 3` (the optional sampler). (In the file each `TODO` sits with its
+function, so their positions run in a different order.)
 
 #### First: the shape every pipe follows
 
@@ -387,7 +416,7 @@ supplies the value to write).
 You are not writing from a blank page: two functions are **already written for you** as examples, and
 every pipe follows the exact same **five-step shape**. Here is the smaller of the two,
 [`create_passthrough_pipe()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L621), in outline — the shape all
-four of your functions take:
+three of your functions take:
 
 ```c
 // 1. MATCH — say which fields this pipe looks at (the values come later, per entry)
@@ -410,22 +439,25 @@ where captured copies land — you'll use it in Stage 2, so set it aside for now
 With that shape in hand, you build your pipeline in **two stages**: **Stage 1** gets the NIC
 *marking* packets and forwarding them — you watch the counter climb; **Stage 2** adds a mirror so you
 can capture a copy and actually *see* the CE bit on the wire.
-[`build_pipeline()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L809) is where all the pieces connect.
+[`build_pipeline()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L837) is where all the pieces connect.
 
 #### Stage 1 — mark and forward
 
-Fill in **two** functions and leave the other two alone for now.
+First switch the program from plain forwarding to marking, then write the one pipe that marks.
 
-**`create_root_pipe`** ([`TODO 1`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L794)) — the **root**. Every
-packet hits this first; it sorts by the port a packet arrived on: from the wire → your marking pipe;
-coming back from the receiver → straight out the wire. It is the same idea as the root pipe in the
-Part B forwarder — two entries keyed on `parser_meta.port_meta`.
+**Flip `build_pipeline()` from no-op to ECN.** As shipped (Part B) it runs one line of no-op wiring,
+with the ECN pipeline right below it, commented out. In
+[`build_pipeline()`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L837), **comment out the single no-op line
+and uncomment the block under it** — the comments there mark exactly which line and which block. That
+block calls the three `TODO` functions; until you fill them in the compiler warns they are "defined
+but not used," which is how you know what is still left to write.
 
-> **NOTE:** the "coming back from the receiver" direction must be forwarded **without** marking — it
-> carries the RoCE acknowledgements and congestion signals, and marking those would corrupt the
-> feedback the Part II controller depends on.
+> **NOTE — the return direction is already handled.** Your `create_root_pipe` (from Part B) already
+> forwards traffic *coming back from the receiver* straight out the wire, **unmarked** — it carries the RoCE
+> acknowledgements and congestion signals, and marking those would corrupt the feedback the Part II
+> controller depends on. You only write the *forward* (wire → receiver) marking path.
 
-**`create_forward_to_sf_pipe`** ([`TODO 2`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L749)) — the marking
+**`create_forward_to_sf_pipe`** ([`TODO 1`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L746)) — the marking
 pipe. Start from the `create_passthrough_pipe` shape shown above (match IPv4, forward to the
 receiver), then add two things:
 
@@ -437,9 +469,9 @@ receiver), then add two things:
 
 <br>
 
-**Step 1 — fill in `create_root_pipe` and `create_forward_to_sf_pipe`** (the root pipe and the
-marking pipe); leave the other two functions alone for now. When a pipe is wrong, DOCA prints a wall
-of red text — the **last** line is the one that matters, and it names the pipe that failed.
+**Step 1 — flip `build_pipeline()` to ECN, then fill in `create_forward_to_sf_pipe`** (`TODO 1`, the
+marking pipe); leave `TODO 2` and `TODO 3` alone for now. When a pipe is wrong, DOCA prints a wall of
+red text — the **last** line is the one that matters, and it names the pipe that failed.
 
 **Step 2 — build it and run it, with traffic.** Build, start your program in Terminal 1, then start
 traffic with `benchmark.sh` in Terminal 2:
@@ -458,7 +490,7 @@ Your marking program prints a line once a second — with no capture it looks li
 CE marked: 57060637, passthrough: 0 (100% marked)
 ```
 **`CE marked:` climbing** means packets are flowing through your marking pipe, and `benchmark.sh`
-should show near line rate (~92 Gb/s) at the same time. You are marking packets in hardware.
+should show **near line rate** at the same time. You are marking packets in hardware.
 
 </details>
 
@@ -474,12 +506,12 @@ already written for you — so the only new thing *you* wire up is the mirror it
 That is two changes, and the comment above each one in the source walks you through it step by step;
 here is what they are and why:
 
-**1. Write `bind_capture_mirror`** ([`TODO 3`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L723)) — it
+**1. Write `bind_capture_mirror`** ([`TODO 2`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L723)) — it
 builds no pipe of its own. It sets up the shared *mirror* once and aims it at `cpu_pipe`, so a copy
 of every hit reaches the CPU (and your pcap) while the original keeps going. Follow the numbered
 steps in the comment directly above the function.
 
-**2. Switch the mirror on in your marking pipe.** In `create_forward_to_sf_pipe` — the TODO 2 you
+**2. Switch the mirror on in your marking pipe.** In `create_forward_to_sf_pipe` — the TODO 1 you
 already wrote — there is a `mirror` parameter you left unused in Stage 1. Add the short
 `if (mirror) …` block the comment points to; it attaches the shared mirror to that pipe. Now, only
 when you pass `--pcap` (which is what makes `mirror` true), each marked packet is copied to the
@@ -517,7 +549,7 @@ A quick tally — at `--percent 100` essentially every packet should be `CE`:
 tcpdump -vnn -c 8000 -r /tmp/out.pcap 2>/dev/null | grep -oE 'tos 0x[0-9a-f]+(,CE)?' | sort | uniq -c
 #   7994 tos 0x3,CE
 ```
-And `benchmark.sh` still showed ~92 Gb/s throughout — the copy is made in the eSwitch hardware, so
+And `benchmark.sh` still showed **line rate** throughout — the copy is made in the eSwitch hardware, so
 capturing costs no throughput.
 
 </details>
@@ -525,7 +557,7 @@ capturing costs no throughput.
 #### Going further (optional) — mark only some packets
 
 So far every packet is marked (`--percent 100`). To mark only a fraction, fill in the last function,
-**`create_sampling_pipe`** ([`TODO 4`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L771)): it matches the
+**`create_sampling_pipe`** ([`TODO 3`](doca-2/doca-flow/doca_flow_ecn_pcap.c#L762)): it matches the
 NIC's built-in random field (`parser_meta.random`) so that 1-in-N packets take the marking path and
 the rest are forwarded unmarked. Then run, for example:
 ```bash
@@ -582,7 +614,7 @@ You can now:
 ## FAQs
 
 **I've never written C or used DOCA. Can I still do Part C?**
-Yes. You only fill in four short functions, and each is a small variation of an example shown to you
+Yes. You only fill in three short functions, and each is a small variation of an example shown to you
 (`create_passthrough_pipe`, `create_to_cpu_pipe`, and the forwarder from Part B). The comment above
 each `TODO` walks you through it, and you can always `diff` against the finished file to check
 yourself.
@@ -607,9 +639,9 @@ then there is nothing to write — you confirm marking with the `CE marked:` cou
 It makes RoCE establish its connection through the RDMA connection manager. It is harmless here and is
 required later so the Part II controller can attach to the flow — so just always keep it on.
 
-**Do I ever change anything outside the four `TODO` functions?**
+**Do I ever change anything outside the `TODO` functions?**
 No. The template and the finished `doca_flow_ecn_pcap.c` are identical everywhere else — a `diff`
-should show only your four function bodies.
+should show only your three function bodies (plus the one-line/one-block flip in `build_pipeline`).
 
 ---
 

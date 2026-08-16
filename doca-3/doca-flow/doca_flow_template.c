@@ -829,49 +829,29 @@ static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe 
   const uint32_t nb_entries = 2;
   DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
 
-  // A full mask on the ingress port: it is compared exactly, and each entry supplies the port it
-  // matches.
+  // The match and its mask, a hit forward and a miss forward, and a handle for the new pipe
+  // are declared for you -- fill in their fields and create the pipe.
   struct doca_flow_match match = {0}, match_mask = {0};
-  match.parser_meta.port_id = UINT16_MAX;
-  match_mask.parser_meta.port_id = UINT16_MAX;
-  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
+  struct doca_flow_fwd fwd_hit = {0};
+  struct doca_flow_fwd fwd_miss = {0};
+  struct doca_flow_pipe *pipe = NULL;
 
-  struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_CHANGEABLE};
-  struct doca_flow_fwd fwd_miss = {.type = DOCA_FLOW_FWD_DROP};
-  struct doca_flow_pipe *pipe;
-  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe));
+  // TODO (Part B, Step 1) -- build the pipe: set match/match_mask on the ingress port
+  // (parser_meta), fwd_hit.type = CHANGEABLE and fwd_miss.type = DROP, set the match on the
+  // cfg, then doca_flow_pipe_create(...). See "Step 1 -- build the pipe" in the guide.
 
   doca_flow_pipe_cfg_destroy(cfg);
 
+  // The batch status, an entry handle, and reusable match/forward scratch structs are
+  // declared for you -- fill in and install the pipe's two entries.
   struct entry_batch_status install_status = {0};
   struct doca_flow_pipe_entry *entry;
   struct doca_flow_match entry_match = {0};
   struct doca_flow_fwd entry_fwd = {0};
 
-  // From the wire: on to the head of the marking chain. WAIT_FOR_BATCH holds this entry back so it
-  // reaches the hardware together with the one below.
-  entry_match.parser_meta.port_id = PF_PORT_ID;
-  entry_fwd.type = DOCA_FLOW_FWD_PIPE;
-  entry_fwd.next_pipe = wire_target;
-  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_basic_add_entry(
-                               PIPE_QUEUE, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
-                               DOCA_FLOW_ENTRY_FLAGS_WAIT_FOR_BATCH, &install_status, &entry));
-
-  // From the receiver SF: straight back out of the uplink, untouched.
-  entry_match.parser_meta.port_id = SF_REP_PORT_ID;
-  memset(&entry_fwd, 0, sizeof(entry_fwd));
-  entry_fwd.type = DOCA_FLOW_FWD_PORT;
-  entry_fwd.port_id = PF_PORT_ID;
-  DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_basic_add_entry(
-                               PIPE_QUEUE, pipe, &entry_match, 0, NULL, NULL, &entry_fwd,
-                               DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &install_status, &entry));
-
-  DOCA_CHECK("PORT_DEMUX",
-             doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries));
-  doca_check((install_status.failure || install_status.nb_processed != nb_entries)
-                 ? DOCA_ERROR_BAD_STATE
-                 : DOCA_SUCCESS,
-             "PORT_DEMUX: install");
+  // TODO (Part B, Step 2) -- add and install the two entries: wire (PF_PORT_ID) ->
+  // wire_target with WAIT_FOR_BATCH, receiver SF (SF_REP_PORT_ID) -> PF_PORT_ID with
+  // NO_WAIT, then doca_flow_entries_process(...). See "Step 2 -- add the entries".
   DOCA_LOG_INFO("Port demux ready");
 }
 

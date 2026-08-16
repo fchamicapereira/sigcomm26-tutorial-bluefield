@@ -4,30 +4,30 @@
     doca-N/doca-flow/doca_flow_ecn_pcap.c   (solution, the source of truth)
         -> doca-N/doca-flow/doca_flow_template.c   (exercise)
 
-The template differs from the solution in exactly two ways, and this script is the only thing that
+The template differs from the solution in three ways, and this script is the only thing that
 should ever produce it -- hand-editing is how the two drift apart:
 
-  1. Three function bodies are emptied to a `TODO n` stub. These are the exercise:
+  1. Three function bodies are emptied to a `TODO n` stub. These are the Part C exercise:
 
-         doca-2                       doca-3
-         bind_capture_mirror          create_flood_pipe        TODO 1  (the capture copy)
-         create_forward_to_sf_pipe    create_forward_to_sf_pipe TODO 2  (the CE marking)
-         create_sampling_pipe         create_sampling_pipe      TODO 3  (the 1-in-N split)
+         doca-2                       doca-3                     TODO
+         create_forward_to_sf_pipe    create_forward_to_sf_pipe  TODO 1  (the CE marking)
+         bind_capture_mirror          create_flood_pipe          TODO 2  (the capture copy)
+         create_sampling_pipe         create_sampling_pipe       TODO 3  (the 1-in-N split)
 
-  2. `build_pipeline` is replaced with a version wired as a NO-OP forwarder, with the ECN pipeline
-     present but commented out. That is what makes the untouched template behave exactly like
-     doca_flow_nop: run it and traffic flows at line rate, unmarked. The participant's first act is
-     to comment out one line and uncomment the block under it.
+  2. `create_root_pipe` keeps its cfg boilerplate and teardown, but the two regions the participant
+     writes -- building the pipe, and adding its two entries -- are cut to TODO stubs. This is the
+     Part B exercise: the untouched template owns the eSwitch but installs no root pipe, so nothing
+     forwards until the participant writes it. The regions are found by anchoring on code lines
+     inside the function (see ROOT_CUTS), so the solution needs no tooling markers.
 
-Everything else -- including `create_passthrough_pipe`, `create_to_cpu_pipe` and `create_root_pipe`,
-which are the worked examples -- is copied verbatim, so `diff` between the two files shows the
-exercise and nothing else.
+  3. `build_pipeline` is replaced with a version wired as a NO-OP forwarder, with the ECN pipeline
+     present but commented out. Once create_root_pipe is written (Part B), the untouched
+     build_pipeline runs it as a plain forwarder -- traffic at line rate, unmarked, exactly like
+     doca_flow_nop. The first act of Part C is to comment out one line and uncomment the block under
+     it.
 
-Why `create_root_pipe` is given away rather than being a TODO: the no-op configuration needs it (it
-is what points wire ingress at the passthrough pipe), and a template that cannot forward at all is a
-worse starting point than one that forwards plainly. This was the opposite of the earlier design,
-where the untouched template blackholed every packet and participants had to be told that was
-intentional.
+Everything else -- including `create_passthrough_pipe` and `create_to_cpu_pipe`, the worked examples
+copied verbatim -- is identical, so `diff` between the two files shows the exercise and nothing else.
 
 Usage:
     admin/local_scripts/regen_templates.py              # rewrite the templates
@@ -135,6 +135,38 @@ CAPTURE = {
 }
 
 
+# The Part B exercise, inside create_root_pipe (same in both trees). Each entry cuts the lines from
+# the one containing `start` through the one containing `end` (inclusive) and replaces them with the
+# TODO stub. Anchored on code, not markers, so the solution file stays clean; scoped to the function
+# in cut_region so the anchors are unambiguous even though e.g. `install_status` appears in many
+# functions. Kept tree-agnostic (no port_meta/port_id, no UINT32/UINT16) so one stub fits doca-2 and
+# doca-3 alike.
+ROOT_CUTS = [
+    ("A full mask on the ingress port", "doca_flow_pipe_create(cfg,",
+     ["  // The match and its mask, a hit forward and a miss forward, and a handle for the new pipe",
+      "  // are declared for you -- fill in their fields and create the pipe.",
+      "  struct doca_flow_match match = {0}, match_mask = {0};",
+      "  struct doca_flow_fwd fwd_hit = {0};",
+      "  struct doca_flow_fwd fwd_miss = {0};",
+      "  struct doca_flow_pipe *pipe = NULL;",
+      "",
+      "  // TODO (Part B, Step 1) -- build the pipe: set match/match_mask on the ingress port",
+      "  // (parser_meta), fwd_hit.type = CHANGEABLE and fwd_miss.type = DROP, set the match on the",
+      "  // cfg, then doca_flow_pipe_create(...). See \"Step 1 -- build the pipe\" in the guide."]),
+    ("struct entry_batch_status install_status", "\"PORT_DEMUX: install\"",
+     ["  // The batch status, an entry handle, and reusable match/forward scratch structs are",
+      "  // declared for you -- fill in and install the pipe's two entries.",
+      "  struct entry_batch_status install_status = {0};",
+      "  struct doca_flow_pipe_entry *entry;",
+      "  struct doca_flow_match entry_match = {0};",
+      "  struct doca_flow_fwd entry_fwd = {0};",
+      "",
+      "  // TODO (Part B, Step 2) -- add and install the two entries: wire (PF_PORT_ID) ->",
+      "  // wire_target with WAIT_FOR_BATCH, receiver SF (SF_REP_PORT_ID) -> PF_PORT_ID with",
+      "  // NO_WAIT, then doca_flow_entries_process(...). See \"Step 2 -- add the entries\"."]),
+]
+
+
 def find_fn(lines, name):
     """(first line, closing-brace line) of a top-level function definition."""
     start = next(i for i, l in enumerate(lines)
@@ -146,6 +178,16 @@ def find_fn(lines, name):
     while lines[c] != "}":
         c += 1
     return start, c
+
+
+def cut_region(lines, fn, start_needle, end_needle, stub):
+    """Replace lines[a..b] (inclusive) with `stub`, where a/b are the first lines inside function
+    `fn` that contain start_needle / end_needle. Scoping to the function keeps common needles (like
+    `install_status`) unambiguous. Mutates `lines` in place."""
+    s, c = find_fn(lines, fn)
+    a = next(i for i in range(s, c + 1) if start_needle in lines[i])
+    b = next(i for i in range(a, c + 1) if end_needle in lines[i])
+    lines[a:b + 1] = stub
 
 
 def derive(tree):
@@ -160,6 +202,12 @@ def derive(tree):
         while not lines[o].rstrip().endswith("{"):
             o += 1
         lines[o + 1:c] = ["  // TODO %d -- your code here." % n, ret]
+
+    # Cut the two Part B regions out of create_root_pipe. Step 2 is cut first: it is the later of
+    # the two, so cutting it does not move the Step 1 anchors, and cut_region re-locates the
+    # function each call anyway.
+    for start, end, stub in reversed(ROOT_CUTS):
+        cut_region(lines, "create_root_pipe", start, end, stub)
 
     # Swap build_pipeline, comment block included.
     b0, b1 = find_fn(lines, "build_pipeline")
@@ -191,8 +239,14 @@ def main():
 
         dst.write_text(want)
         # clang-format last, so the template matches the repo style even if the substituted
-        # build_pipeline was wrapped differently from the .clang-format rules.
-        subprocess.run(["clang-format", "-i", str(dst)], check=False)
+        # build_pipeline was wrapped differently from the .clang-format rules. Tolerate it being
+        # absent (check=False only covers a non-zero exit, not a missing binary): the derived text
+        # is already 2-space, <=100-col style, so the only cost is that any odd wrapping is left for
+        # a machine that has clang-format to tidy before commit.
+        try:
+            subprocess.run(["clang-format", "-i", str(dst)], check=False)
+        except FileNotFoundError:
+            print("  note   clang-format not found; wrote unformatted (tidy before committing)")
         print(f"  wrote  {dst.relative_to(REPO)}")
 
     if stale:
