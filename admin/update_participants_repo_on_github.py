@@ -9,8 +9,8 @@ separate program is redundant.
 
 NO SOLUTIONS SHIP. Neither the finished flow program (doca_flow_solution.c, or the capture-capable
 doca_flow_ecn_pcap.c, which contains the same three answers) nor the finished PCC controller
-(rtt_template.c) is copied over. There are no doca-N-solutions/ directories any more; MANAGED still
-lists them so that a checkout from before this change gets them deleted.
+(rtt_template.c) is copied over. There are no doca-N-solutions/ directories any more; OBSOLETE
+lists them so that a checkout from before that change gets them deleted.
 
 Two exercises ship: the DOCA Flow ECN/mirror pipeline (doca-flow/) and, for any version that has a
 PCC template (device/algo/rtt_template_exercise.c), the DOCA PCC pure-ECN reaction-point controller
@@ -26,10 +26,9 @@ Layout it produces:
     doca-2/                       flow exercise (from doca_flow_template.c) + pcc exercise (from
                                   doca-pcc-ecn/device/algo/rtt_template_exercise.c)
     doca-3/                       ditto for the DOCA 3 tree (pcc only if it has a template)
-    tutorial-doca-flow.md         Part I hands-on guide (Markdown; flow filename rewritten)
     tutorial-doca-pcc.md          Part II hands-on guide (Markdown)
     *.pdf                         the rendered guides, at the ROOT (see GUIDES)
-    scripts/                      run_server.sh, run_client.sh, benchmark.sh, check_ecn_bits...
+    scripts/                      run_server.sh, run_client.sh, benchmark.sh
     .vscode/                      IntelliSense paths for the DOCA/DPDK headers on the card
     .clang-format
 
@@ -65,8 +64,14 @@ DEFAULT_DEST = REPO / ".participants"
 
 VERSIONS = ["doca-2", "doca-3"]
 
-# Copied verbatim into scripts/, keeping the executable bit.
-SCRIPTS = ["run_server.sh", "run_client.sh", "benchmark.sh", "check_ecn_bits_from_pcap.sh"]
+# Copied verbatim into scripts/, keeping the executable bit. Just the traffic generators: these
+# are what the guide tells a participant to run.
+#
+# check_ecn_bits_from_pcap.sh is not among them. It reads a pcap, and nothing a participant has can
+# produce one -- the capture-capable program stayed on our side when solutions stopped shipping --
+# so over there it was a script that could only ever fail. scripts/ is in MANAGED and so is rebuilt
+# from this list on every run, which is what removes it from an existing checkout.
+SCRIPTS = ["run_server.sh", "run_client.sh", "benchmark.sh"]
 
 # Rendered guides to hand over, by filename in guides/. The .md sources, template.tex, the logos
 # and the figures stay here -- participants get the PDF and nothing else, which is why this is a
@@ -83,29 +88,37 @@ GUIDES = ["tailscale.pdf", "doca-flow.pdf"]
 # reviewed and edited directly. Mapped to their destination in the participant repo.
 ASSETS = {"participants/c_cpp_properties.json": ".vscode/c_cpp_properties.json"}
 
-# The interactive hands-on guides (GitHub-flavoured Markdown, with <details> collapsibles and links
-# into the source). They ship to the participant repo ROOT, unrendered, so GitHub shows the
-# collapsibles and the doca-2/... source links resolve. The value says whether to apply the flow
-# rename: the flow guide points at doca_flow_template.c, which build_version() renames to
-# doca_flow_ecn.c for participants, so its links must be rewritten to match (the #L anchors are
-# unaffected -- same file, same lines, only the name changes). HTML author-comments are stripped.
-TUTORIAL_GUIDES = {
-    "tutorial-doca-flow.md": True,
-    "tutorial-doca-pcc.md": False,
-}
-
-# Top-level directories this script owns. Anything else in the participant repo survives a run.
+# Interactive hands-on guides (GitHub-flavoured Markdown, with <details> collapsibles and links
+# into the source). They ship to the participant repo ROOT, unrendered, so GitHub renders the
+# collapsibles and the doca-2/... source links resolve. HTML author-comments are stripped.
 #
-# Some entries here are no longer written by anything: doca-N-solutions/ (solutions stopped
-# shipping) and guides/ (the PDFs moved to the root). MANAGED is what gets DELETED before each
-# rebuild, so listing them is exactly what removes those directories from a checkout made before
-# the change. Drop them once no participant checkout has them.
-MANAGED = [f"{v}{suffix}" for v in VERSIONS for suffix in ("", "-solutions")] + [
-    "guides",
-    "scripts",
-    ".vscode",
-]
+# tutorial-doca-flow.md is deliberately NOT here. It is an earlier draft of the DOCA Flow guide and
+# describes an exercise that no longer exists -- four TODOs, mirroring, --pcap, Stage 1/Stage 2 --
+# so shipping it alongside doca-flow.pdf would just contradict it. The file stays in this repo.
+#
+# It was the only guide that needed doca_flow_template.c rewritten to the participant's filename,
+# so render_guide() no longer takes that flag; anything added here should be written against the
+# names a participant actually sees.
+TUTORIAL_GUIDES = ["tutorial-doca-pcc.md"]
+
+# Top-level directories this script owns: deleted and rewritten on every run. Anything else in the
+# participant repo survives.
+MANAGED = list(VERSIONS) + ["scripts", ".vscode"]
 MANAGED_FILES = [".clang-format"]
+
+# Paths this script USED to write and now deletes on sight. Without this they would sit in every
+# existing checkout forever: MANAGED only rebuilds the directories it still owns, and nothing at all
+# deletes a stale file at the root.
+#
+#   doca-N-solutions/       solutions stopped shipping
+#   guides/                 the rendered PDFs moved to the root
+#   tutorial-doca-flow.md   superseded by doca-flow.pdf, and now contradicts it
+#
+# Drop an entry once no participant checkout can still be carrying it.
+OBSOLETE = [f"{v}-solutions" for v in VERSIONS] + [
+    "guides",
+    "tutorial-doca-flow.md",
+]
 
 
 def run(cmd, cwd=None, check=True):
@@ -237,15 +250,10 @@ def copy(src, dst, changes, dry_run):
     shutil.copy2(src, dst)
 
 
-def render_guide(text, flow_rename):
-    """Prepare a tutorial guide for participants: drop the HTML author-comments (they are marked
-    'delete before publishing') and, for the flow guide, rewrite the exercise filename so its source
-    links resolve against the renamed participant file."""
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL).lstrip("\n")
-    if flow_rename:
-        text = text.replace("doca_flow_template.c", "doca_flow_ecn.c")
-        text = text.replace("doca_flow_solution.c", "doca_flow_ecn.c")
-    return text
+def render_guide(text):
+    """Prepare a tutorial guide for participants: drop the HTML author-comments, which are notes to
+    ourselves and are marked 'delete before publishing'."""
+    return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL).lstrip("\n")
 
 
 def build_version(dest, version, changes, dry_run):
@@ -314,6 +322,15 @@ def main():
             if not args.dry_run:
                 shutil.rmtree(path)
 
+    obsolete = []
+    for name in OBSOLETE:
+        path = dest / name
+        if not path.exists():
+            continue
+        obsolete.append(path)
+        if not args.dry_run:
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+
     for version in VERSIONS:
         build_version(dest, version, changes, args.dry_run)
 
@@ -332,13 +349,15 @@ def main():
         copy(REPO / name, dest / name, changes, args.dry_run)
     for src_rel, dst_rel in ASSETS.items():
         copy(REPO / "admin" / src_rel, dest / dst_rel, changes, args.dry_run)
-    for guide, flow_rename in TUTORIAL_GUIDES.items():
-        write(dest / guide, render_guide((REPO / guide).read_text(), flow_rename),
-              changes, args.dry_run)
+    for guide in TUTORIAL_GUIDES:
+        write(dest / guide, render_guide((REPO / guide).read_text()), changes, args.dry_run)
 
     for kind, path in changes:
         print(f"  {kind:6} {path.relative_to(dest)}")
-    print(f"{len(changes)} file(s) written, {len(removed)} managed director(ies) rebuilt")
+    for path in obsolete:
+        print(f"  delete {path.relative_to(dest)}")
+    print(f"{len(changes)} file(s) written, {len(removed)} managed director(ies) rebuilt"
+          f"{f', {len(obsolete)} obsolete path(s) deleted' if obsolete else ''}")
 
     if args.dry_run:
         return 0

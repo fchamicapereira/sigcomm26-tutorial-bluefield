@@ -202,7 +202,7 @@ enp3s0f1s0    UP    ...     # a "sub-function" (SF) on the p1 side
 ```
 
 The traffic we will watch is **RoCE** (RDMA over Converged Ethernet), the high-speed, kernel-bypass
-transport used in AI and storage networks. RoCE does not use normal sockets; programs reach it
+transport used in AI and storage networks. RoCE doesn't use normal sockets. Instead, programs reach it
 through **RDMA devices** named `mlx5_0`, `mlx5_1`, `mlx5_2`, `mlx5_3`. List them:
 
 ```bash
