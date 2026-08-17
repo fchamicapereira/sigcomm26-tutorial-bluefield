@@ -9,3 +9,30 @@ admin/results
 .DS_Store
 .participants
 __pycache__/
+
+# Build directories
+build/
+build-*/
+
+# Ninja files
+.ninja_deps
+.ninja_log
+compile_commands.json
+
+# Editor / IDE
+.vscode/
+.idea/
+.kiro/
+*.swp
+*~
+
+# Object files and libraries
+*.o
+*.a
+*.so
+
+# DPA/PCC specific generated files
+*.dpa.o
+*.stub.inc
+*_host_stubs.o
+*.meta.c
