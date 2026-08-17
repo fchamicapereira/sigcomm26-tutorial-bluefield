@@ -77,20 +77,20 @@ The PCC program lives in `doca-pcc-ecn/`, and its layout mirrors the two halves 
 
 > **NOTE — you edit only one file.** The only file you touch in this part is `rtt_template.c`
 > (under `device/algo/`). Everything in it is written for you except two function bodies, marked
-> `TODO 1` and `TODO 2`, which you fill in Step 4.
+> `TODO 1` and `TODO 2`, which you fill in Step 3.
 
 **The DPA entry point: `device/rp_main.c`.** It holds the callback the DPA runs on every event, which
 hands that event straight to your algorithm — `rtt_template_algo()`, in `device/algo/rtt_template.c`.
 
-`rtt_template_algo()` runs once per event, per flow. It can be called by different types of events out of those we are interested in 2:
+`rtt_template_algo()` runs once per event, per flow. It can be called by several event types; two of them matter here:
 
-- **CNP event** are triggered by recievel of multiple congestion notifications.
+- A **CNP event** is triggered by the receipt of congestion notifications.
   This triggers the call of the function `rtt_template_handle_roce_cnp()` in
-  `device/algo/rtt_template.c`. Currently, has no side-effects (keeps the current
+  `device/algo/rtt_template.c`. Currently it has no effect (it keeps the current
   rate of the sender unchanged).
-- **"TX" event** are triggered by when a batch of packets is sent.
+- A **"TX" event** is triggered when a batch of packets is sent.
   This triggers the call of the function `rtt_template_handle_roce_tx()` in 
-  `device/algo/rtt_template.c`. Currently, this function also does not change the current rate of the sender.
+  `device/algo/rtt_template.c`. Currently it also leaves the sender's rate unchanged.
   
 > **INFO** — the NIC batches events for you. At line rate the DPA could never keep up with
 > one event per packet, so the hardware coalesces them: one event stands for many packets.
@@ -110,7 +110,7 @@ commands run from inside the version directory you moved into in Step 1:
 
 ```bash
 # Setting up the build directory 
-# Contrary to the Part 1, we need to run this every time we edit the code.
+# Unlike Part 1, we need to run this every time we edit the code.
 $ meson setup --reconfigure build
 
 # Compile the application
@@ -120,14 +120,14 @@ $ ninja -C build
 > **NOTE — rebuild with `--reconfigure`.** Everything under `device/` is
 > compiled into the DPA image at configure time, not build time. Plain `ninja` has no dependency
 > on those files, so on its own it will report `no work to do` and re-link the DPA image you built
-> before your edit. After editing a TODO, always rebuild with:
+> before your edit. After editing a TODO, always rebuild with `meson setup --reconfigure build && ninja -C build`.
 
-Much like the Part 1 keep the benchmark script running in one terminal through the tutorial:
+Much like Part 1, keep the benchmark script running in one terminal throughout the tutorial:
 ```bash
-# Keep the running!!
+# Keep it running!
 $ ../scripts/benchmark.sh
 ```
-**Run the DOCA Flow application** you developed in Part 1 on this tutorial to mark packets with congestion signals. Let's make the application mark 100% of the packets:
+**Run the DOCA Flow application** you developed in Part 1 to mark packets with congestion signals. Let's make the application mark 100% of the packets:
 ```bash
 $ sudo ./build/doca-flow/doca_flow_ecn -- --percent 100
 ```
@@ -142,7 +142,7 @@ $ sudo stdbuf -oL  ./build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50
 
 **What you should see.** 
 
-By looking at the output of the DOCA Flow application you should see that every packet is having its CE bit set, and from the PCC output you should see that the congestion notification are being received: 
+By looking at the output of the DOCA Flow application you should see that every packet is having its CE bit set, and from the PCC output you should see that the congestion notifications are being received: 
 
 ```bash
 PURE_ECN cnp=1    rate=1048576
@@ -153,15 +153,15 @@ PURE_ECN cnp=1001 rate=1048576
 However by looking at the `benchmark.sh` output you *don't* see the performance being affected despite the congestion signals.
 </div>
 
-**The goal of this tutorial** is to implement the custome congestion control algorithm that reacts to the congestion signals and adjusts the sender's rate accordingly.
+**The goal of this tutorial** is to implement the custom congestion-control algorithm that reacts to the congestion signals and adjusts the sender's rate accordingly.
 
 
-# Step 3 — Implementing the custome CC algorithm on the DPA
+# Step 3 — Implementing the custom CC algorithm on the DPA
 
-The custome CC algorithm has 2 main components (`TODO 1` and `TODO 2` on the `device/algo/rtt_template.c` file) that you need to implement:
+The custom CC algorithm has 2 main components (`TODO 1` and `TODO 2` on the `device/algo/rtt_template.c` file) that you need to implement:
 
-- **An multiplicative decrease** reaction to congestion signals, so that sender decrease its rate when congestion is detected.
-- **An additive increase** reaction to the absence of congestion signals, so that sender increase its rate when no congestion is detected.
+- **A multiplicative decrease** reaction to congestion signals, so the sender decreases its rate when congestion is detected.
+- **An additive increase** reaction to the absence of congestion signals, so the sender increases its rate when no congestion is detected.
 
 We will now go over the details of each of these components and how to implement them.
 
@@ -169,7 +169,7 @@ We will now go over the details of each of these components and how to implement
 
 - Modify the flow's current rate by setting the `cur_rate` variable (input parameter).
 - Use `ECN_CNP_DEC_FACTOR` as the multiplicative decrease factor.
-- Use `doca_pcc_dev_fxp_mult()` to perform a high-performant 16-bit multiplication of the rate with that fixed-point factor into a rate for you.
+- Use `doca_pcc_dev_fxp_mult()` to perform a fast fixed-point multiplication of the rate by that factor.
 - Use `MIN_RATE` to prevent the rate from dropping below a certain value.
 
 > **INFO — the one knob that changes its behavior.** The decrease factor is a single constant at
@@ -184,9 +184,9 @@ We will now go over the details of each of these components and how to implement
 <div class="tryit">
 **Try it now**
 
-Rerun the experiment with DOCA Flow and `benchmark.sh` running on other terminals (*remember to reconfigure and rebild the PCC application with `meson setup --reconfigure build && ninja -C build`*). See now
+Rerun the experiment with DOCA Flow and `benchmark.sh` running on other terminals (*remember to reconfigure and rebuild the PCC application with `meson setup --reconfigure build && ninja -C build`*). See now
 on the `benchmark.sh` output that the congestion signals *deeply* affect throughput, which
-blummeted suddently plummeted when the congestion signals were received.
+suddenly plummeted when the congestion signals arrived.
 </div>
 
 
@@ -194,12 +194,11 @@ blummeted suddently plummeted when the congestion signals were received.
 **drift back up** gently so that we don't cause congestion again. Implement this logic in the function `rtt_template_handle_roce_tx()`:
 
 - Keep a global counter (that persists across calls) so you act only every ~1000th call rather than on every single send event;
-<!-- FIXME: help the participant understand where this AI comes from and how to use it. -->
-- Increment the sender's rate by `AI >> 2` (a small step to add each time, about 1.25% of line rate);
+- Increment the sender's rate by `AI >> 2`. `AI` is a predefined constant (in `device/algo/rtt_template_algo_params.h`) equal to 5% of line rate, so `AI >> 2` — a quarter of it — adds a gentle ~1.25% each time;
 - Prevent the rate from exceeding `RATE_MAX`.
 
 <div class="tryit">
-**Try to run it again, now with the additive increase implemented (*remember to reconfigure and rebild the PCC application with `meson setup --reconfigure build && ninja -C build`*).**
+**Try to run it again, now with the additive increase implemented (*remember to reconfigure and rebuild the PCC application with `meson setup --reconfigure build && ninja -C build`*).**
 
 Rerun the experiment with DOCA Flow and `benchmark.sh` running on other terminals. See now
 on the `benchmark.sh` output that the congestion signals still *deeply* affect throughput.
@@ -271,7 +270,7 @@ A smaller fraction (`--percent 50`) is a gentler, more realistic signal.
 
 **Rate set-point vs measured goodput.** The rate is a *set-point*; the throughput you actually get
 also depends on queueing and retransmissions. A controller can hold a similar average rate yet deliver
-very different goodput — which is what the Step 4.3 sweep shows: a sharper cut keeps the queue shallow
+very different goodput: a sharper cut keeps the queue shallow
 and can *raise* goodput even though the average rate is unchanged.
 
 # Appendix C — The code you edit, and the API
