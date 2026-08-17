@@ -26,7 +26,8 @@ By the end of this section, you will understand how to:
 4. validate the complete data and feedback loop using hardware counters and host-side diagnostics.
 
 The implementation supports DOCA 2.9, 3.1, and 3.4 through a shared compatibility layer.
-DOCA 2.7 is not currently supported.
+The 3.1 and 3.4 paths are hardware-validated; the 2.9 path is compile-tested and still needs
+hardware validation. DOCA 2.7 is not supported.
 The logical pipeline and command-line model remain the same; only the SDK-specific host, PCC-reporting, and DOCA Flow APIs differ.
 
 # Step 1 — Understand the scenario
@@ -94,6 +95,17 @@ The tutorial emulates two paths using the two PF domains and one physical loopba
 - PF0 runs the ingress path-emulation pipeline.
 - Two receiver SFs represent the blue and green receiver endpoints.
 
+The earlier tutorial setup already introduced `ns0` (`mlx5_2`, `10.0.0.1`) and `ns1` (`mlx5_3`).
+This bonus setup adds one more receiver endpoint: `pf0sf4` appears as RDMA device `mlx5_4` inside
+namespace `ns0_1`, with IP address `10.0.0.11`. It is a second SF in the PF0 domain, not a second
+physical port. The tutorial card is prepared with this extra SF and namespace before you begin.
+
+| Endpoint            | Representor | RDMA device | Namespace | IP          | Role           |
+| ------------------- | ----------- | ----------- | --------- | ----------- | -------------- |
+| Blue receiver SF    | `pf0sf0`    | `mlx5_2`    | `ns0`     | `10.0.0.1`  | Blue QP server |
+| Green receiver SF   | `pf0sf4`    | `mlx5_4`    | `ns0_1`   | `10.0.0.11` | Green QP server |
+| Shared sender SF    | `pf1sf0`    | `mlx5_3`    | `ns1`     | `10.0.0.2`  | Both QP clients |
+
 ![Dual-flow data path in PCC path steering](./images/end-to-end-data-path-dual-flow.png)
 
 Since both virtual paths share the same cable, the egress pipeline writes the selected path into IP ToS bit `0x04` (DSCP bit 0).
@@ -152,14 +164,22 @@ This gives you a known-good reference for the pipeline startup messages, initial
 
 ## Step 2.1 — Build the solution
 
-From the repository root, configure the build and compile the PCC and steering applications:
+Enter the path-steering project, configure its build directory, and compile the PCC and steering
+applications:
 
 ```bash
-meson setup build --reconfigure
-ninja -C build
+$ cd doca-3/pcc-path-steering
+$ meson setup build
+$ ninja -C build
 ```
 
+If `build` is already configured, use `meson setup build --reconfigure` instead of the first-time
+`meson setup build`. Run all remaining relative commands in this guide from the
+`doca-3/pcc-path-steering` directory.
+
 The same source builds on DOCA 2.9, 3.1, and 3.4 through the compatibility layer.
+This checkout keeps the shared source under `doca-3/pcc-path-steering`; there is no separate
+`doca-2/pcc-path-steering` directory.
 
 ## Step 2.2 — Start the receiver-side path emulator
 
@@ -177,6 +197,11 @@ sudo ./build/doca_flow_steer \
 ```
 
 This process reads the private path bit, applies the configured path-specific ECN policy, clears the private bit, and delivers each QP to its receiver SF.
+
+The values are literal percentages, not fractions: `0.025` means **0.025%**, and `0.05` means
+**0.05%**. The selected-probe sampler doubles them internally to 0.05% and 0.1%, respectively,
+then rounds down to a supported power-of-two probability. These low rates still produce feedback
+quickly at line rate while making path 1 approximately twice as likely to mark its probe QP.
 
 ## Step 2.3 — Start PCC with the completed egress solution
 
@@ -244,6 +269,19 @@ egress assigned counters: path0=<count> path1=<count> ratio=32:32 buckets
 The two packet counts will not be exactly equal because bucket selection is random.
 Before PCC reacts to congestion, however, they should show that the initial bucket assignment sends traffic over both paths at roughly the same rate.
 
+Within the first few reporting intervals, the PCC terminal should also show one mapping for each
+sender QP, for example:
+
+```text
+RDMA-CM REQ grouping: sender QPN 0x<qpn> receiver IP=0x<ip> -> path0
+RDMA-CM REQ grouping: sender QPN 0x<qpn> receiver IP=0x<ip> -> path1
+```
+
+The periodic `PCC path-share diagnostic` should then report `pending-map=0`. Mapping and a share
+change should normally complete within a few seconds. If `pending-map` remains nonzero, verify that
+both clients use `-R`, both receiver processes were started first, and both destination IPs match
+the ingress and PCC commands.
+
 You should be able to observe the following:
 
 - Both `ib_write_bw` clients continue reporting throughput without transport errors, and the two parallel flows achieve similar throughput.
@@ -283,7 +321,7 @@ Stop the four `ib_write_bw` processes, PCC, and the ingress steering process bef
 
 Before changing the path split, we first need to assign packets to a stable set of buckets that the
 controller can assign to either path. This step walks through the provided random classifier in
-[`steering/steer.c`](../steering/steer.c) and then asks you to build the same kind of pipe yourself.
+[`steering/steer.c`](doca-3/pcc-path-steering/steering/steer.c) and then asks you to build the same kind of pipe yourself.
 
 ## Step 3.1 — Understand the random-bucket classifier
 
@@ -329,13 +367,15 @@ The first 63 entries use `STEER_WAIT_FOR_BATCH`, and the final entry submits the
 
 ## Step 3.3 — Understand the DOCA 2.9 implementation
 
-DOCA 2.x does not provide the native RANDOM map algorithm used on DOCA 3.x.
+DOCA 2.9 does not provide the native RANDOM map algorithm used on DOCA 3.x.
 Instead, the packet parser supplies a per-packet random value in `parser_meta.random`, and `create_legacy_small_random_table()` configures a HASH pipe to hash that value.
 The match mask sets all 16 bits of `parser_meta.random`, allowing the HASH pipe to distribute packets across its 64 entries.
 Each entry writes its bucket index to `meta.u32[4]` and forwards to the same dispatch pipe used by the DOCA 3.x implementation.
 The rest of the steering pipeline therefore sees the same metadata contract on every supported DOCA version.
 
-The compatibility choice is selected at compile time through `STEER_USE_RANDOM_HASH_CLASSIFIER` and `DOCA_USES_LEGACY_FLOW_BACKEND` in [`steering/doca_flow_compat.h`](../steering/doca_flow_compat.h).
+The compatibility choice is selected at compile time through `STEER_USE_RANDOM_HASH_CLASSIFIER` and
+`DOCA_USES_LEGACY_FLOW_BACKEND` in
+[`steering/doca_flow_compat.h`](doca-3/pcc-path-steering/steering/doca_flow_compat.h).
 The tutorial code should use the compatibility wrappers such as `steer_pipe_hash_add_entry()` instead of duplicating SDK-specific entry API calls.
 
 ## Step 3.4 — Build the classifier
@@ -348,19 +388,30 @@ For now, however, it will maintain a fixed `32:32` bucket-to-path split; you wil
 <summary><b>Try it yourself! Build the random-bucket classifier.</b></summary>
 
 The repository contains the completed implementation so that you can run the working example first.
-To replace the relevant solution bodies with numbered TODO stubs, apply the provided patch from the
-`doca-<version>/pcc-path-steering` directory:
+To replace the relevant solution bodies with numbered TODO stubs, apply the provided patch from its
+project directory:
 
 ```bash
-patch -p1 < solution-to-diy.patch
+$ cd doca-3/pcc-path-steering
+$ patch -p1 < solution-to-diy.patch
 ```
 
-Implement a 64-entry random-bucket classifier that provides the same metadata contract as the walkthrough above.
-Step 3 corresponds to TODO 1 in `create_legacy_small_random_table()`, TODO 2 in `create_classify_pipe()`, and TODO 3 in `add_classify_entries()`.
+The patch exposes all four TODOs at once. In this step, leave **TODO 4 unfinished** so
+`apply_path_share()` remains a no-op; you will implement it in Step 4.
+
+Implement a 64-entry random-bucket classifier that provides the same metadata contract as the
+walkthrough above. The TODO comments point back to the relevant guide sections:
+
+- **DOCA 2.9:** implement TODO 1 in `create_legacy_small_random_table()` using Step 3.3.
+- **DOCA 3.1 or 3.4:** implement TODO 2 in `create_classify_pipe()` and TODO 3 in
+  `add_classify_entries()` using Step 3.2.
+
+Only the branch for the installed SDK is compiled, so you do not need to implement the other
+version's classifier during the tutorial.
 The DIY version keeps the completed dispatch pipe and assigns 32 buckets to each path.
 Its `apply_path_share()` function is initially a no-op, so PCC diagnostics may calculate a new target while the applied hardware ratio remains `32:32`.
 
-Your implementation should:
+On DOCA 3.1 or 3.4, your implementation should:
 
 1. create a non-root HASH pipe named `EGRESS_CLASSIFY`;
 2. configure the native RANDOM map algorithm when `STEER_USE_RANDOM_HASH_CLASSIFIER` is enabled;
@@ -370,10 +421,22 @@ Your implementation should:
 6. write the entry's bucket number to `meta.u32[4]` in big-endian order; and
 7. submit the entries as a batch and verify all 64 completions.
 
-For the DOCA 2.9 branch, create the equivalent immutable HASH table with `create_legacy_small_random_table()` while preserving the same metadata output.
-Use `steer_pipe_hash_add_entry()` so the compatibility layer handles the SDK-specific function signature.
+For the DOCA 2.9 branch, create the equivalent immutable HASH table with
+`create_legacy_small_random_table()` while preserving the same metadata output. Use
+`steer_pipe_hash_add_entry()` so the compatibility layer handles the SDK-specific function
+signature.
 
-You are finished when the application builds on your installed DOCA version, prints the appropriate classifier-ready message, and continues reporting traffic on both paths with the fixed `32:32` bucket split.
+Rebuild from the project directory:
+
+```bash
+$ ninja -C build
+```
+
+Then repeat Steps 2.2 through 2.4: start ingress, start PCC, start both receivers, and start both
+clients. You are finished when the application prints the classifier-ready message for your SDK
+and reports traffic on both paths with a fixed `32:32` bucket split. The path-share diagnostic may
+calculate a target other than `32:32`, but the applied ratio must remain `32:32` because TODO 4 is
+intentionally unfinished. Stop all six processes before continuing to Step 4.
 
 </details>
 
@@ -445,8 +508,9 @@ The update log proves that the dispatch policy changed, while the counters prove
 <details>
 <summary><b>Try it yourself! Implement live path-share updates.</b></summary>
 
-If you have not already done so in Step 3, apply `solution-to-diy.patch` from the
-`doca-<version>/pcc-path-steering` directory to expose the numbered TODO stubs.
+If you have not already done so in Step 3, enter `doca-3/pcc-path-steering` and apply
+`solution-to-diy.patch` there to expose the numbered TODO stubs. TODO 4 in `apply_path_share()`
+points back to Step 4.2.
 
 The provided `create_classify_dispatch_pipe()` already installs the 64-entry dispatch table, saves the entry handles, and records the initial path assignment.
 Implement TODO 4 in `apply_path_share()` so that it:
@@ -462,7 +526,9 @@ Implement TODO 4 in `apply_path_share()` so that it:
 Use the compatibility wrapper `steer_pipe_update_entry()` rather than calling a version-specific DOCA Flow update API directly.
 
 As a quick reasoning check, verify that a transition from `32:32` to `48:16` performs exactly 16 entry updates and that repeating `48:16` performs none.
-You are finished when traffic continues during a share change, the application prints the applied-share message, and the hardware counters move toward the new ratio.
+Rebuild with `ninja -C build`, then repeat Steps 2.2 through 2.4. You are finished when traffic
+continues during a share change, the application prints the applied-share message within a few
+reporting intervals, and the hardware counters move toward the new ratio.
 
 </details>
 

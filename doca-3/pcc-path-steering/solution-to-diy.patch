@@ -49,7 +49,7 @@
 -	DOCA_LOG_INFO("Legacy random HASH ready: %u bits, %u immutable metadata buckets",
 -		random_bits, nr_entries);
 -	return pipe;
-+	/* TODO 1: Build the DOCA 2.9 immutable random-bucket HASH pipe. */
++	/* TODO 1 (Guide Step 3.3): Build the DOCA 2.9 immutable random-bucket HASH pipe. */
 +	return NULL;
  }
  #endif
@@ -87,7 +87,7 @@
 -	crash_if_unsuccessful(err, "pipe_create (classify)");
 -	doca_flow_pipe_cfg_destroy(cfg);
 -	return pipe;
-+	/* TODO 2: Build the DOCA 3.x native RANDOM HASH pipe. */
++	/* TODO 2 (Guide Step 3.2): Build the DOCA 3.x native RANDOM HASH pipe. */
 +	return NULL;
  }
  
@@ -108,7 +108,7 @@
 -	}
 -	process_entries(port, &g_classify_batch, PATH_SHARE_BUCKETS, "classify hash entries");
 -	DOCA_LOG_INFO("Classify random-bucket pipe ready: HASH/random writes bucket to meta.u32[4]");
-+	/* TODO 3: Install the 64 immutable DOCA 3.x HASH entries. */
++	/* TODO 3 (Guide Step 3.2): Install the 64 immutable DOCA 3.x HASH entries. */
 +	return;
  }
  #endif
@@ -159,7 +159,7 @@
 -	g_steer.applied_path0_share = path0_share;
 -	DOCA_LOG_INFO("PCC path share applied: path0 %u->%u/64 path1=%u/64",
 -	              old_share, path0_share, PATH_SHARE_BUCKETS - path0_share);
-+	/* TODO 4: Update only the dispatch entries that cross the path-share boundary. */
++	/* TODO 4 (Guide Step 4.2): Update only dispatch entries that cross the share boundary. */
 +	return;
  }
  
