@@ -15,10 +15,38 @@ title: "Part 2 — Programmable Congestion Control with DOCA PCC"
   regenerable via admin/make_pcc_exercise.py). As shipped the scaffold builds and runs but never
   moves the rate, which is exactly what Stage 1 exploits.
 
-  Author notes are in HTML comments; delete before publishing. Line-links assume this file sits at
-  the repo root; exercise spots are referenced by function name + TODO marker rather than line
-  number, since those shift in the scaffold. Expected outputs (PURE_ECN lines, throughput numbers)
-  are illustrative from earlier runs — AUTHOR: replace with real pastes + screenshots on the card.
+  Author notes are in HTML comments; delete before publishing. Links are absolute URLs into the
+  PARTICIPANT repo, and their #L anchors are against the shipped rtt_template.c -- the renamed
+  exercise (488 lines), not our solution of the same name (469). Verified anchor by anchor.
+
+  WALKED ON HARDWARE 2026-08-17, bf3-ulisbon-1 (DOCA 2.9), both TODOs written from the "Check your
+  answer" block, with the Part 1 flow SOLUTION running as the marker. What holds and what does not:
+
+    HOLDS.  Part A's checkpoint is exact, cnp=1/501/1001 at a flat rate=1048576. Both answers
+            compile as written. Stage 2's recovery is the strongest moment in the guide: stop the
+            marker and the benchmark goes 0.0058 -> 59.37 -> 92.34 Gb/s within about two seconds.
+
+    DOES NOT HOLD -- all four are the same root cause, and all still need fixing:
+      * Stage 1's trace. The guide shows 943718 -> 214380 -> 52428; the card gives 943712 -> 64
+        (MIN_RATE) by the second sample. The walk-down is over in far fewer than the 500 CNPs
+        between prints, so the middle is never sampled.
+      * "it at least halves, usually much more" is 92.37 -> 0.0058 Gb/s, about 16,000x. A dead
+        link, not a throttled one.
+      * The FAQ's "--percent 50 for a gentler signal" does not help: 50/25/10 all collapse
+        identically, and even --percent 1 only reaches 0.14-0.52 Gb/s.
+      * The sweep table (68 / 88.5 / 86.7 Gb/s) is out by three to four orders of magnitude.
+        Measured at --percent 100 exactly as "re-run Stage 1" says: x0.99 -> 0.027-0.044,
+        x0.90 -> 0.0058, x0.80 -> 0.0058 Gb/s. The ordering does not survive either.
+
+    WHY. Every CNP cuts 10%; the increase adds 1.25% only every ~1000 TX events, and once the rate
+    is on the floor TX events are rare. Against synthetic marking the cuts always win. Those
+    goodput figures must come from a different regime (real congestion, or tune_ecn.py), not from
+    what this guide instructs. Either re-measure and republish the numbers, or reframe the section
+    around what the hardware actually does.
+
+    USEFUL ACCIDENT: x0.99 is the ONLY setting where the sawtooth is legible in the trace -- 61
+    distinct rates climbing 65 -> 11320, against 3 rates at x0.90. For SHOWING the loop work, the
+    "barely reacts" setting is the good one, which is the opposite of what the section implies.
 -->
 
 
@@ -125,8 +153,8 @@ just sits there — that's expected; a controller with nothing to react to has n
 the Part I marker (so packets are CE-marked and the receiver sends CNPs), then drive traffic with
 `benchmark.sh` — the loopback is already up from Part I:
 ```bash
-# in a doca-2 terminal — the Part I marker: CE-mark every packet
-sudo ./build/doca-flow/doca_flow_ecn_pcap -- --percent 100
+# in a doca-2 terminal — your finished Part 1 marker: CE-mark every packet
+sudo ./build/doca-flow/doca_flow_ecn -- --percent 100
 # in another terminal (from the repo root) — runs server + client together, with a live throughput chart
 ./scripts/benchmark.sh
 ```
@@ -272,11 +300,11 @@ of the loop come alive.
 
 The pieces you'll have running together while you test:
 
-| what                                              | where                       | why                                                  |
-| ------------------------------------------------- | --------------------------- | ---------------------------------------------------- |
-| the ECN marker from Part I (`doca_flow_ecn_pcap`) | PF0 (`mlx5_0`)              | marks packets CE, which makes the receiver send CNPs |
-| **the PCC controller** (`doca_pcc_ecn_rp`)        | PF1 (`mlx5_1`)              | reacts to those CNPs by setting the sender's rate    |
-| RoCE traffic (`ib_write_bw`)                      | the SFs (`mlx5_2`/`mlx5_3`) | the flow whose rate you'll watch move                |
+| what                                                 | where                       | why                                                  |
+| ---------------------------------------------------- | --------------------------- | ---------------------------------------------------- |
+| the ECN marker you wrote in Part 1 (`doca_flow_ecn`) | PF0 (`mlx5_0`)              | marks packets CE, which makes the receiver send CNPs |
+| **the PCC controller** (`doca_pcc_ecn_rp`)           | PF1 (`mlx5_1`)              | reacts to those CNPs by setting the sender's rate    |
+| RoCE traffic (`ib_write_bw`)                         | the SFs (`mlx5_2`/`mlx5_3`) | the flow whose rate you'll watch move                |
 
 ### Stage 1 — write `TODO 1` (the cut) and watch the rate collapse
 
@@ -351,11 +379,14 @@ gate out and the rate rockets straight back up and re-triggers congestion.
 traffic as in Stage 1, then, partway through, **stop the marker** in its terminal so the CNPs dry up
 while the flow keeps running:
 ```bash
-sudo pkill -INT -x doca_flow_ecn_pcap    # congestion clears; no more CNPs
+sudo pkill -INT -x doca_flow_ecn    # congestion clears; no more CNPs
 ```
-Watch the controller's terminal: while the marker ran the rate was cut down (that's `TODO 1`); once
-the CNPs stop, the rate **climbs back toward full** (that's `TODO 2`). That rise-and-fall is the
-DCQCN **sawtooth** — both halves of your controller working together:
+The controller's terminal shows you the cut half: `PURE_ECN` lines walking the rate down while the
+marker runs. **The climb back shows up on `benchmark.sh`'s chart, not there** — `PURE_ECN` only
+prints when a CNP arrives, so the moment the CNPs stop the trace stops with them. Watch the
+throughput instead: it collapses under marking (`TODO 1`), then climbs back toward line rate once
+the marker is gone (`TODO 2`). That fall and rise is the DCQCN **sawtooth** — both halves of your
+controller working together:
 ```
 PURE_ECN cnp=1001 rate=52428      # cut down while marking
 # ... marker stopped: no new PURE_ECN cuts, TX events raise the rate back to 1048576 ...
@@ -458,7 +489,7 @@ Put `900` back when you're done to restore the tuned controller.
   is not live. Check with `admin/local_scripts/check_pcc_ready.sh` (it should say `ready`). On the
   tutorial cards it's set for you; if you see `doca_pcc … not supported`, that's the cause.
 - **No `PURE_ECN` lines ever appear** → no CNPs are reaching the controller. Make sure the Part I
-  marker (`doca_flow_ecn_pcap --percent 100`) is running so packets are CE-marked, and that traffic
+  marker (`doca_flow_ecn --percent 100`) is running so packets are CE-marked, and that traffic
   is actually flowing. (If the controller's output is just too chatty to spot them, reload it with
   `| grep --line-buffered PURE_ECN` appended to see only that trace.)
 - **Stop it gracefully with Ctrl-C** in its terminal (SIGINT), or with
