@@ -33,7 +33,7 @@ digraph pcc_two_halves {
     loader [shape=box, style="rounded,filled", color="#a8a8a8", fillcolor="#ededed",
             margin="0.16,0.10",
             label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
-                     <TR><TD ALIGN="LEFT"><B>doca_pcc_ecn_rp</B></TD></TR>
+                     <TR><TD ALIGN="LEFT"><B>pcc_ecn_rp</B></TD></TR>
                      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="9">opens the PCC context</FONT></TD></TR>
                      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="9">uploads the DPA program</FONT></TD></TR>
                      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="9">prints logs, stays running</FONT></TD></TR>
