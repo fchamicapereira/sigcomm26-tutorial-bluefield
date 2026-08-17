@@ -293,7 +293,6 @@ def build_version(dest, version, changes, dry_run):
     copy_tree(src / "pcc-path-steering", out / "pcc-path-steering", changes, dry_run,
               PATH_STEERING_SKIP)
 
-
 def ensure_checkout(dest, dry_run):
     if (dest / ".git").is_dir():
         if not dry_run:
