@@ -1,0 +1,24 @@
+--- pcc-path-steering.md
++++ pcc-path-steering.pdf.md
+@@ -37 +37 @@
+-<img src="./images/simple-multi-path-topology.png" alt="A single-flow multi-path scenario" width="25%">
++![A single-flow multi-path scenario](./images/simple-multi-path-topology.png){ width=25% }
+@@ -63 +63 @@
+-<img src="./images/paired-multi-path-topology.png" alt="A two-flow multi-path scenario" width="25%">
++![A two-flow multi-path scenario](./images/paired-multi-path-topology.png){ width=25% }
+@@ -344,2 +344,2 @@
+-<details>
+-<summary><strong>Try it yourself!</strong></summary>
++<!-- PDF expands the GitHub disclosure below. -->
++### Try it yourself!
+@@ -374 +374 @@
+-</details>
++<!-- End expanded disclosure. -->
+@@ -441,2 +441,2 @@
+-<details>
+-<summary><strong>Try it yourself!</strong></summary>
++<!-- PDF expands the GitHub disclosure below. -->
++### Try it yourself!
+@@ -462 +462 @@
+-</details>
++<!-- End expanded disclosure. -->

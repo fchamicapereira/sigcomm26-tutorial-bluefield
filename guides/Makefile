@@ -37,6 +37,8 @@ PANDOC_FLAGS := \
 .PHONY: all clean
 all: $(PDFS)
 
+pcc-path-steering.pdf: pcc-path-steering-pdf.patch
+
 # Every PDF depends on the shared header and metadata, so correcting a room number or adding an
 # organizer rebuilds all of them rather than just whichever guide was edited last.
 #
@@ -57,14 +59,19 @@ all: $(PDFS)
 # anyway. It is loud enough not to be missed.
 %.pdf: %.md $(TEMPLATE) $(METADATA)
 	@echo "  PDF   $@"
-	@out=$$($(PANDOC) $< -o $@ $(PANDOC_FLAGS) 2>&1); status=$$?; \
+	@tmp=; input="$<"; pdf_patch="$(basename $<)-pdf.patch"; \
+	  if [ -f "$$pdf_patch" ]; then \
+	    tmp="_pdf_$<"; cp "$<" "$$tmp"; \
+	    if ! patch --silent "$$tmp" < "$$pdf_patch"; then rm -f "$$tmp"; exit 1; fi; input="$$tmp"; \
+	  fi; \
+	  out=$$($(PANDOC) "$$input" -o $@ $(PANDOC_FLAGS) 2>&1); status=$$?; \
 	  printf '%s' "$$out" | grep . >&2 || true; \
 	  if [ $$status -eq 0 ] && printf '%s' "$$out" | grep -q 'Missing character'; then \
 	    echo "  WARN  $@: characters were DROPPED -- the PDF has gaps where they should be:" >&2; \
 	    printf '%s' "$$out" | grep -o 'There is no .* (U+[0-9A-F]*) in font \[[^]/]*' \
 	      | sed 's/^/          /' | sort -u >&2; \
 	  fi; \
-	  exit $$status
+	  rm -f "$$tmp"; exit $$status
 
 .PHONY: $(basename $(MDS))
 $(basename $(MDS)): %: %.pdf
@@ -91,8 +98,14 @@ $(basename $(MDS)): %: %.pdf
 check:
 	@fail=0; \
 	for md in $(MDS); do \
-	  b=$${md%.md}; \
-	  $(PANDOC) $$md -o _check_$$b.tex $(PANDOC_FLAGS) 2>/dev/null; \
+	  b=$${md%.md}; input=$$md; tmp=; pdf_patch=$$b-pdf.patch; \
+	  if [ -f "$$pdf_patch" ]; then \
+	    tmp=_pdf_$$md; cp "$$md" "$$tmp"; \
+	    if ! patch --silent "$$tmp" < "$$pdf_patch"; then \
+	      echo "  FAIL  $$b.pdf: cannot apply $$pdf_patch" >&2; rm -f "$$tmp"; fail=1; continue; \
+	    fi; input=$$tmp; \
+	  fi; \
+	  $(PANDOC) $$input -o _check_$$b.tex $(PANDOC_FLAGS) 2>/dev/null; \
 	  $(ENGINE) -interaction=batchmode _check_$$b.tex >/dev/null 2>&1 || true; \
 	  ov=$$(grep -a -c '^Overfull \\hbox' _check_$$b.log 2>/dev/null || true); \
 	  mc=$$(grep -a -c 'Missing character' _check_$$b.log 2>/dev/null || true); \
@@ -105,7 +118,7 @@ check:
 	  else \
 	    echo "  ok    $$b.pdf"; \
 	  fi; \
-	  rm -f _check_$$b.tex _check_$$b.log _check_$$b.aux _check_$$b.out _check_$$b.pdf; \
+	  rm -f "$$tmp" _check_$$b.tex _check_$$b.log _check_$$b.aux _check_$$b.out _check_$$b.pdf; \
 	done; \
 	exit $$fail
 
