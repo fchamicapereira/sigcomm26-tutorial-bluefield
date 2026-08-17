@@ -436,15 +436,17 @@ static void run_report_loop(const struct pipeline *pl) {
 
 // PASSTHROUGH -- the fallback forward, and the worked example the exercise is modelled on.
 //
-// Matches IPv4 (the DSCP/ECN byte is declared but wildcarded) and forwards to port 1, the receiver
-// SF. No counter and no CE marking: it moves the packet and does nothing else, which makes it the
-// smallest complete instance of the five-part shape every pipe in this file follows.
+// It declares no match field at all, so every packet reaches its single entry, and forwards the lot
+// to port 1, the receiver SF. No counter and no CE marking: it moves the packet and does nothing
+// else, which makes it the smallest complete instance of the shape every pipe in this file follows.
+//
+// Matching everything is what lets it serve as MARK's and PASS's miss target. Those two match IPv4,
+// so their miss is ARP and the like, and this pipe has to carry that traffic rather than drop it:
+// create_root_pipe_nop() forwards everything, so a pipeline that dropped non-IPv4 would be less
+// transparent than the no-op it replaces, and a RoCE connection established while the pipeline is
+// live needs its ARP to get through.
 //
 // build_pipeline() aims the root pipe here in D.1, before there is anything else to aim it at.
-// After that nothing forwards to it: MARK and PASS were briefly its only callers, as their miss
-// target, but a miss there means "not IPv4" and this pipe wants IPv4 too -- so such a packet missed
-// twice and was dropped anyway. They now send their misses straight to the SF, and this pipe stays
-// as D.1's target and as the example the other two are modelled on.
 static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *port) {
   struct doca_flow_pipe_cfg *cfg;
 
@@ -457,9 +459,8 @@ static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *por
   const uint32_t nb_entries = 1;
   DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_set_nr_entries(cfg, nb_entries));
 
+  // Both left all-zero: no field is declared, so nothing is compared and everything matches.
   struct doca_flow_match match = {0}, match_mask = {0};
-  match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
-  match.outer.ip4.dscp_ecn = 0xFF;
   DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
 
   struct doca_flow_fwd fwd_hit = {.type = DOCA_FLOW_FWD_PORT, .port_id = SF_REP_PORT_ID};
@@ -468,9 +469,7 @@ static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *por
 
   doca_flow_pipe_cfg_destroy(cfg);
 
-  // `match` is reused as this entry's values, so drop the template's 0xFF placeholder.
-  match.outer.ip4.dscp_ecn = 0x00;
-
+  // `match` is reused as this entry's values -- all zero, like the template above.
   struct entry_batch_status install_status = {0};
   struct doca_flow_pipe_entry *entry;
   DOCA_CHECK("PASSTHROUGH", doca_flow_pipe_basic_add_entry(PIPE_QUEUE, pipe, &match, 0, NULL, NULL,
@@ -496,10 +495,13 @@ static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *por
 // The counter is not incidental -- it is what the once-a-second "CE marked: / passthrough:" report
 // queries, and without it there is no way to see whether the pipeline is doing anything.
 //
-// HIT AND MISS BOTH FORWARD TO THE SF, so nothing is dropped here. What the match decides is what
-// gets COUNTED, and when `mark` is set, MARKED -- non-IPv4 (ARP and the like) misses and goes on
-// untouched and uncounted. That matters: create_root_pipe_nop() forwards everything, so a pipeline
-// that dropped non-IPv4 would be less transparent than the no-op it replaces.
+// NOTHING IS DROPPED HERE: a miss goes to miss_pipe, which is PASSTHROUGH, which forwards it to the
+// SF untouched. What the match decides is what gets COUNTED, and when `mark` is set, MARKED --
+// non-IPv4 (ARP and the like) misses and travels on uncounted and unmarked.
+//
+// The miss cannot name a port directly. DOCA only accepts a pipe or a drop as a miss forward, and
+// rejects DOCA_FLOW_FWD_PORT with "invalid fwd_miss type 2" at pipe_create() time. Handing the miss
+// to a pipe that forwards everything is how you say "carry on" -- which is what PASSTHROUGH is for.
 //
 // `mark` is the only thing that differs between the two: it attaches the action that rewrites
 // dscp_ecn to CE. That is not what the pipe is FOR -- forwarding is -- which is why the ECN part of
@@ -507,6 +509,7 @@ static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *por
 //
 // out_entry hands the installed entry back so the report can query its counter.
 static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *port, bool mark,
+                                                        struct doca_flow_pipe *miss_pipe,
                                                         struct doca_flow_pipe_entry **out_entry) {
   const char *name = mark ? "MARK" : "PASS";
   struct doca_flow_pipe_cfg *cfg;
@@ -549,11 +552,12 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
   //   3. the counter, which is what the CE marked: report reads:
   //        monitor.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;
   //        doca_flow_pipe_cfg_set_monitor(cfg, &monitor)
-  //   4. the forwards:
+  //   4. the forwards -- a hit goes to the SF, a miss carries on into miss_pipe
+  //      (PASSTHROUGH), which forwards everything, so nothing is dropped here:
   //        fwd_hit.type = DOCA_FLOW_FWD_PORT;   fwd_hit.port_id = SF_REP_PORT_ID;
-  //        fwd_miss.type = DOCA_FLOW_FWD_PORT;  fwd_miss.port_id = SF_REP_PORT_ID;
-  //        -- hit and miss both go to the SF; the match only decides what gets
-  //           counted and marked, so nothing is dropped here
+  //        fwd_miss.type = DOCA_FLOW_FWD_PIPE;  fwd_miss.next_pipe = miss_pipe;
+  //        -- a miss forward may only be a pipe or a drop. DOCA_FLOW_FWD_PORT is
+  //           rejected here with "invalid fwd_miss type 2".
   //   5. doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe)
   // Wrap each call in DOCA_CHECK(name, ...).
 
@@ -806,11 +810,14 @@ static void build_pipeline(struct doca_flow_port *port, const struct app_config 
   //
   // struct doca_flow_pipe *wire_target = create_passthrough_pipe(port);  // [1]
   //
-  // // PASS forwards and counts; MARK also rewrites the ECN bits to CE. Both send everything to
-  // // the SF either way -- the match only decides what is counted and marked.
-  // struct doca_flow_pipe *pass = create_forward_to_sf_pipe(port, false, &out->pass_entry);
+  // // PASS forwards and counts; MARK also rewrites the ECN bits to CE. Anything they do not
+  // // match misses into PASSTHROUGH and reaches the SF anyway, so the match only decides what is
+  // // counted and marked, never what gets through.
+  // struct doca_flow_pipe *pass =
+  //     create_forward_to_sf_pipe(port, false, wire_target, &out->pass_entry);
   // struct doca_flow_pipe *mark = NULL;
-  // if (cfg->random_percent > 0.0) mark = create_forward_to_sf_pipe(port, true, &out->ce_entry);
+  // if (cfg->random_percent > 0.0)
+  //   mark = create_forward_to_sf_pipe(port, true, wire_target, &out->ce_entry);
   //
   // // Where wire traffic actually enters, per --percent.
   // if (cfg->random_percent >= 100.0)

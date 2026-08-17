@@ -365,7 +365,7 @@ functions at the bottom of the file:
 | Function                      |            | What it does                                      |
 | ----------------------------- | ---------- | ------------------------------------------------- |
 | `build_pipeline()`            | given      | Calls the pipe creation functions                 |
-| `create_passthrough_pipe()`   | given      | Forward IPv4 to the server, unchanged             |
+| `create_passthrough_pipe()`   | given      | Forward everything to the server, unchanged       |
 | `create_root_pipe_nop()`      | given      | The root pipe as shipped: wire to server and back |
 | `create_root_pipe()`          | **TODO 1** | Yours — the same, but into your chain             |
 | `create_forward_to_sf_pipe()` | **TODO 2** | Forward, count, and set the CE mark when asked    |
@@ -374,7 +374,8 @@ functions at the bottom of the file:
 `build_pipeline()` is the one to read closely: it is the whole exercise in a single function, and
 it ships wired as a plain forwarder. In this function, note what `wire_target` does: it starts out
 as `PASSTHROUGH` — a working forwarder on its own, and all D.1 needs — and is then reassigned to
-whichever pipe wire traffic should really enter as you add the pipes in front of it.
+whichever pipe wire traffic should really enter as you add the pipes in front of it. `PASSTHROUGH`
+stays in the pipeline either way: it is where `MARK` and `PASS` send anything they do not match.
 
 # Part D — The actual tutorial exercise
 
@@ -441,11 +442,11 @@ and it takes over (notice again the small temporary dip in throughput).
 > keeps traffic moving. Take it away with nothing in its place and everything stops: an empty
 > pipeline does not mean "pass traffic through", it means "drop everything".
 
-**Now start writing your own root pipe.** In `build_pipeline()`, comment out the call to the no-op root
-pipe (`create_root_pipe_nop`), and uncomment the two lines tagged `// [1]`. Let's now fill in `create_root_pipe()`
-— its two gaps are `TODO 1a` and `TODO 1b`.
+**Updating the pipeline building mechanism.** In `build_pipeline()`, comment out the call to the no-op root
+pipe (`create_root_pipe_nop`), and uncomment the two lines tagged `// [1]`.
 
-Every pipe is built the same way, in two layers:
+**Now start writing your own root pipe.** Let's now fill in `create_root_pipe()`
+— its two gaps are `TODO 1a` and `TODO 1b`. Every pipe is built the same way, in two layers:
 
 - **The pipe is a template.** When you create a pipe you describe its *shape* — which header fields
   it matches on, which fields its actions may rewrite, and where a match forwards — but **not** the
@@ -489,15 +490,15 @@ one, with the counters still at zero — `wire_target` is `PASSTHROUGH`, which c
 Uncomment the rest of the block in `build_pipeline()`, then fill in `create_forward_to_sf_pipe()` —
 `TODO 2a` and `TODO 2b`.
 
-<!-- FIXME: double check that this is factually correct. -->
 **This one function builds both of the forwarding pipes.** `build_pipeline()` calls it **twice**:
-once to build a pipe that does *not* mark the packets' ECN bits, and another to build a pipe that
-does mark them.
+once to build a pipe that does *not* mark the packets' ECN bits ("PASS" in Figure 3), and another
+to build a pipe that does mark them ("MARK" in Figure 3).
 Everything the two have in common — the match, the counter, the forwards — you write unconditionally.
 The two steps that are specific to the marking pipe are the action template in `TODO 2a` and the value
 the entry writes in `TODO 2b`.
 
-Start from `create_passthrough_pipe()`: this is the same pipe with a counter and an action added.
+Take inspiration from `create_passthrough_pipe()`, right above `create_forward_to_sf_pipe()`:
+this is essentially the same pipe but with a counter and an action added.
 
 - **Match** any IPv4 packet *whatever ECN bits it arrived with*, using the wildcard idiom from
   Part B: `outer.ip4.dscp_ecn` as `0xFF` in the pipe's match, `0x00` in the mask. Reset that byte to
@@ -507,8 +508,10 @@ Start from `create_passthrough_pipe()`: this is the same pipe with a counter and
 - **The marking action**, when `mark` is true: declare `outer.ip4.dscp_ecn` as `0xFF` in a
   pipe-level action template, and have the entry write the value. RFC 3168 gives the two-bit ECN
   field as `Not-ECT 00`, `ECT(1) 01`, `ECT(0) 10`, `CE 11`, so the byte you want is `0x03`.
-- **Forwards**: hits *and* misses both to the server's SF. Nothing is dropped here — the match only
-  decides what gets counted and marked, so non-IPv4 goes on untouched.
+- **Forwards**: a hit goes to the server's SF; a miss goes to `miss_pipe`, which is `PASSTHROUGH`
+  and forwards everything. Nothing is dropped here — the match only decides what gets counted and
+  marked, so non-IPv4 (ARP and the like) travels on untouched. A miss may only be a pipe or a
+  drop, never a port, which is why the fallback is a pipe.
 - Hand the installed entry back through `out_entry` — that is what the counter report queries.
 
 Rebuild and run with `--percent 100`. Traffic should be at line rate, and now the counter climbs:
@@ -517,17 +520,18 @@ Rebuild and run with `--percent 100`. Traffic should be at line rate, and now th
 CE marked: 57060637, passthrough: 0 (100% marked)
 ```
 
-**That is you rewriting headers in hardware**, at line rate, with your program doing nothing but
-printing a number once a second.
+**You just programmed the Bluefield to rewrite packet headers in hardware**, at line rate, with your
+program running on the Arm cores doing nothing but printing the counter once a second.
 
-> **Seeing the bit itself.** The counter proves packets went through your marking pipe, not that
+<!-- > **Seeing the bit itself.** The counter proves packets went through your marking pipe, not that
 > the byte on the wire changed. Ask an organiser if you want to watch that directly: we have a
 > version of this program that also mirrors the traffic into a capture file, in hardware and at no
-> cost to throughput, and `tcpdump` then shows the marked packets as `tos 0x3,CE`.
+> cost to throughput, and `tcpdump` then shows the marked packets as `tos 0x3,CE`. -->
 
 ## D.3 — Mark only some packets
 
-`create_sampling_pipe()` — `TODO 3a` and `TODO 3b` — splits traffic probabilistically, in hardware.
+We will now create Figure 3's `RANDOM_SAMPLE` pipe by implementing `create_sampling_pipe()`
+(`TODO 3a` and `TODO 3b`), which splits traffic across pipes probabilistically in hardware.
 
 The NIC stamps every packet with a random 16-bit value in `parser_meta.random`. Match it against `0`
 under `mask`, which has already been computed for you as a power of two minus one, and exactly

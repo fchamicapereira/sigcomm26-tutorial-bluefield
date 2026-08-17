@@ -155,11 +155,12 @@ CUTS = [
       "  //   3. the counter, which is what the CE marked: report reads:",
       "  //        monitor.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;",
       "  //        doca_flow_pipe_cfg_set_monitor(cfg, &monitor)",
-      "  //   4. the forwards:",
+      "  //   4. the forwards -- a hit goes to the SF, a miss carries on into miss_pipe",
+      "  //      (PASSTHROUGH), which forwards everything, so nothing is dropped here:",
       "  //        fwd_hit.type = DOCA_FLOW_FWD_PORT;   fwd_hit.port_id = SF_REP_PORT_ID;",
-      "  //        fwd_miss.type = DOCA_FLOW_FWD_PORT;  fwd_miss.port_id = SF_REP_PORT_ID;",
-      "  //        -- hit and miss both go to the SF; the match only decides what gets",
-      "  //           counted and marked, so nothing is dropped here",
+      "  //        fwd_miss.type = DOCA_FLOW_FWD_PIPE;  fwd_miss.next_pipe = miss_pipe;",
+      "  //        -- a miss forward may only be a pipe or a drop. DOCA_FLOW_FWD_PORT is",
+      "  //           rejected here with \"invalid fwd_miss type 2\".",
       "  //   5. doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe)",
       "  // Wrap each call in DOCA_CHECK(name, ...)."]),
     ("create_forward_to_sf_pipe", "What the template above allowed to be written",
@@ -235,11 +236,14 @@ static void build_pipeline(struct doca_flow_port *port, const struct app_config 
   //
   // struct doca_flow_pipe *wire_target = create_passthrough_pipe(port);  // [1]
   //
-  // // PASS forwards and counts; MARK also rewrites the ECN bits to CE. Both send everything to
-  // // the SF either way -- the match only decides what is counted and marked.
-  // struct doca_flow_pipe *pass = create_forward_to_sf_pipe(port, false, &out->pass_entry);
+  // // PASS forwards and counts; MARK also rewrites the ECN bits to CE. Anything they do not
+  // // match misses into PASSTHROUGH and reaches the SF anyway, so the match only decides what is
+  // // counted and marked, never what gets through.
+  // struct doca_flow_pipe *pass =
+  //     create_forward_to_sf_pipe(port, false, wire_target, &out->pass_entry);
   // struct doca_flow_pipe *mark = NULL;
-  // if (cfg->random_percent > 0.0) mark = create_forward_to_sf_pipe(port, true, &out->ce_entry);
+  // if (cfg->random_percent > 0.0)
+  //   mark = create_forward_to_sf_pipe(port, true, wire_target, &out->ce_entry);
   //
   // // Where wire traffic actually enters, per --percent.
   // if (cfg->random_percent >= 100.0)
