@@ -1,3 +1,7 @@
+---
+title: "Part 2 — Programmable Congestion Control with DOCA PCC"
+---
+
 <!--
   DRAFT — Part II of the hands-on tutorial: DOCA PCC. (Part I is tutorial-doca-flow.md.)
   Audience: a networking person who has NOT written DOCA/DPA/C code before. Same style as Part I:
@@ -17,9 +21,8 @@
   are illustrative from earlier runs — AUTHOR: replace with real pastes + screenshots on the card.
 -->
 
-# Programmable Congestion Control on the BlueField-3 with DOCA PCC
 
-In [Part I](tutorial-doca-flow.md) you programmed the NIC to *mark* congestion — you set the **CE**
+In **Part 1** (`doca-flow.pdf`) you programmed the NIC to *mark* congestion — you set the **CE**
 bit on packets in the data plane. In this part you write the other side of that story: the
 **congestion-control algorithm that reacts to those marks**, deciding how fast a flow is allowed to
 send — and you run it on a set of tiny processors *inside* the NIC called the **DPA**.
@@ -38,7 +41,7 @@ We build up in three parts:
   collapse, then **TODO 2** (the recovery) and watch the sawtooth; then tune how hard it reacts.
 
 > **Prerequisites.**
-> - You have done [Part I](tutorial-doca-flow.md) — PCC reacts to the ECN marks you produced there.
+> - You have done **Part 1** (`doca-flow.pdf`) — PCC reacts to the ECN marks you produced there.
 > - You are on the **Arm cores** of a BlueField-3 with this repo checked out and `sudo` access.
 > - One firmware knob, **`USER_PROGRAMMABLE_CC=1`**, must be live for any PCC program to start — on
 >   the tutorial cards this is already set for you. (Details in the [FAQs](#faqs).)
@@ -51,19 +54,9 @@ We build up in three parts:
 
 A DOCA PCC program comes in two pieces that run in two different places:
 
-```
-        HOST — the Arm cores (control plane)            NIC hardware (data plane)
-   ┌──────────────────────────────────┐        ┌────────────────────────────────────────┐
-   │  doca_pcc_ecn_rp   (host program) │ loads  │   DPA cores run YOUR algorithm           │
-   │   • opens the PCC context         │ ─────► │   your_algo()  runs once per EVENT       │
-   │   • uploads the DPA program        │        │     ▲ events: a packet sent, a CNP, …    │
-   │   • prints logs, stays running     │        │     ▼ writes results->rate               │
-   └──────────────────────────────────┘        │   NIC per-flow RATE LIMITER ◄── set here  │
-                                               └────────────────────────────────────────┘
-```
-<!-- AUTHOR: for the HTML artifact, replace with an SVG/mermaid diagram. -->
+![The two halves of a DOCA PCC program. The host side only loads and supervises; every packet-time decision happens on the DPA, inside the algorithm you write.](../docs/pcc-two-halves.png){ width=95% }
 
-- **The host program** ([`doca_pcc_ecn_rp`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c)) is just a
+- **The host program** ([`doca_pcc_ecn_rp`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c)) is just a
   **loader and supervisor**. It uploads your compiled algorithm to the NIC, opens the PCC context,
   and then sits there keeping it alive and printing logs. It does **not** run the algorithm itself.
 - **The algorithm** runs on the **DPA** — the *Data-Path Accelerator*, a cluster of small, highly
@@ -143,7 +136,8 @@ sudo ./build/doca-flow/doca_flow_ecn_pcap -- --percent 100
 ```
 PURE_ECN cnp=1    rate=1048576
 PURE_ECN cnp=501  rate=1048576
-PURE_ECN cnp=1001 rate=1048576     # it SEES the CNPs, but the rate never moves — no reactions yet
+PURE_ECN cnp=1001 rate=1048576
+# it sees the CNPs, but the rate never moves — no reactions yet
 ```
 Those lines are mixed in with the loader's chatter; if it's too busy to read, stop it and reload with
 `| grep --line-buffered PURE_ECN` appended to show only these. That flat rate is exactly the point of
@@ -165,24 +159,24 @@ then stop the marker and traffic in the other terminals.
 You ran this program in Part A; here is what it actually does, top to bottom. This is the **host
 half** — the loader and supervisor — and you won't edit it, but following its flow shows exactly
 where *your* code (the DPA half) gets plugged in and takes over. It all lives in
-[`host/pcc_ecn_rp.c`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c):
+[`host/pcc_ecn_rp.c`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c):
 
 1. **Read the two flags** — `-d <device>` (which NIC, e.g. `mlx5_1`) and `-l <level>` (log verbosity).
 2. **Open that device** —
-   [`open_pcc_device()`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L103) finds the IB device with that
+   [`open_pcc_device()`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L103) finds the IB device with that
    name that *supports PCC*, and opens it.
 3. **Create a PCC context** on the device — `doca_pcc_create()`.
 4. **Attach your algorithm** —
-   [`doca_pcc_set_app(pcc, pcc_ecn_rp_app)`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L182). That
+   [`doca_pcc_set_app(pcc, pcc_ecn_rp_app)`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L182). That
    `pcc_ecn_rp_app` is the **compiled DPA image**, built from `device/rp_main.c` + your
    `device/algo/rtt_template.c` — this single line is where the code you write gets loaded in.
 5. **Configure it** — the DPA thread pool, the CNP probe format (plain RoCE CNP), logging/coredump.
 6. **Start it** —
-   [`doca_pcc_start(pcc)`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L211) uploads your algorithm onto the
+   [`doca_pcc_start(pcc)`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L211) uploads your algorithm onto the
    NIC's DPA and sets it running. **From this moment the DPA is in charge:** every congestion event
    runs your code.
 7. **Supervise** — the host then just loops in
-   [`doca_pcc_wait()`](doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L231), checking the process stays
+   [`doca_pcc_wait()`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/host/pcc_ecn_rp.c#L231), checking the process stays
    healthy and otherwise doing nothing. All the real per-event work is on the DPA now.
 
 Steps 1–5 are setup, **step 6 is the handoff**, and step 7 is the host getting out of the way.
@@ -193,7 +187,7 @@ the rest of Part B is about.
 
 The DPA calls your algorithm **once per congestion-relevant event, for each flow** — not once per
 packet. The entry point is
-[`doca_pcc_dev_user_algo()`](doca-2/doca-pcc-ecn/device/rp_main.c#L30); it hands your code that
+[`doca_pcc_dev_user_algo()`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/device/rp_main.c#L30); it hands your code that
 flow's saved state, the event, and a `results` struct — you set the new rate by writing it into
 `results` (the function itself returns nothing). The events that matter here are:
 
@@ -212,23 +206,7 @@ You don't wire any of this up. The DPA calls **one fixed entry point** per event
 dispatch routes it to the right handler by **event type**. Here's the path a **CNP** takes to the
 code you'll write (`TODO 1`), and where the other events land:
 
-```
-  a CNP arrives at the NIC   (the receiver echoing back your Part I CE mark)
-                │
-                ▼   NIC coalesces events, then calls your entry point — once, for this flow:
-  doca_pcc_dev_user_algo(algo_ctxt, event, attr, results)                        ← rp_main.c
-      │      algo_ctxt = this flow's saved state       results = where you write the new rate
-      ▼
-  rtt_template_algo(event, …)   reads the event's ev_type, then routes on it     ← rtt_template.c
-      │
-      ├─ ev_type == ROCE_TX   →  rtt_template_handle_roce_tx()    ← TODO 2 (raise the rate)
-      ├─ ev_type == ROCE_CNP  →  rtt_template_handle_roce_cnp()   ← TODO 1 (cut the rate)  ★ this one
-      └─ new flow / NACK / …  →  handled for you
-                │
-                ▼   your handler writes results->rate
-  the NIC programs this flow's hardware rate limiter to that value
-```
-<!-- AUTHOR: for the HTML artifact, replace this ASCII block with an SVG/mermaid diagram. -->
+![The path a CNP takes to the handler you write. The dark path is the one traced here; the pale branches are where the other events land. Whichever handler runs, it writes `results->rate`.](../docs/pcc-event-dispatch.png){ width=80% }
 
 So each of the two reactions below is just the body of one of those `..._handle_roce_*` functions
 — the dispatch that gets you there is already written.
@@ -237,14 +215,14 @@ So each of the two reactions below is just the body of one of those `..._handle_
 
 Our controller is a textbook **DCQCN** loop — the classic "additive-increase / multiplicative-
 decrease" pattern. All of it lives in two short handlers in
-[`rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L450), and each does one thing. **Both of
+[`rtt_template.c`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L450), and each does one thing. **Both of
 them are left blank for you** — that's the exercise — so below we describe exactly what each must do
 and the pieces you build it from. You'll write them in Part C; here, just take in the shape.
 
 **1. A CNP arrives → cut the rate (multiplicative decrease). ← you write this, `TODO 1`.**
 Congestion is happening, so the rate must come **down** by a fixed factor, and never fall below a
 floor. It goes in
-[`..._handle_roce_cnp()`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375), at the marker `TODO 1`.
+[`..._handle_roce_cnp()`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375), at the marker `TODO 1`.
 The pieces, all already there for you:
 - `cur_rate` — the flow's current rate (the fixed-point number from Part A); you edit it in place.
 - `ECN_CNP_DEC_FACTOR` — the cut factor, ×0.90 by default (a `#define` at the top of the file).
@@ -255,7 +233,7 @@ The pieces, all already there for you:
 `TODO 2`.** When traffic is moving and nothing is cutting it, the rate should **drift back up** —
 gently, and only occasionally, so it doesn't overshoot and immediately re-trigger congestion. It
 goes in
-[`..._handle_roce_tx()`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L218), at the marker `TODO 2`.
+[`..._handle_roce_tx()`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L218), at the marker `TODO 2`.
 The pieces:
 - a `static` counter, so you act only every ~1000th call rather than on every single send event;
 - `AI >> 2` — a small step to add each time, about 1.25% of line rate;
@@ -269,7 +247,7 @@ settles low; when congestion clears (no more CNPs), the rate climbs back to full
 
 > **INFO — the one knob that changes its personality.** The decrease factor is a single constant at
 > the top of the file,
-> [`ECN_CNP_DEC_FACTOR`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L54):
+> [`ECN_CNP_DEC_FACTOR`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L54):
 > ```c
 > #define ECN_CNP_DEC_FACTOR (((1 << 16) * 900) / 1000)  // ×0.90 per CNP; 800..995 = ×0.80..×0.995
 > ```
@@ -287,7 +265,7 @@ you studied in Part B:
 - **`TODO 1`** — cut the rate when a CNP arrives (multiplicative decrease), in `..._handle_roce_cnp()`
 - **`TODO 2`** — raise the rate when things are quiet (additive increase), in `..._handle_roce_tx()`
 
-Both are marked in [`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375). As
+Both are marked in [`device/algo/rtt_template.c`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375). As
 shipped they're empty, so the controller **builds and runs but never changes the rate** — a flow
 sends flat-out no matter how congested the link is. You'll add them one at a time and watch each half
 of the loop come alive.
@@ -318,7 +296,7 @@ As you saw there, with `TODO 1` still empty the rate sits flat and the BW doesn'
 traffic and marker running while you edit.
 
 **Step 2 — write `TODO 1`.** Open
-[`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375) and find `TODO 1` in
+[`device/algo/rtt_template.c`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L375) and find `TODO 1` in
 `..._handle_roce_cnp()`. Using the pieces from Part B — `doca_pcc_dev_fxp_mult()`,
 `ECN_CNP_DEC_FACTOR`, `cur_rate`, `MIN_RATE` — make the rate come **down** by the cut factor on each
 CNP, then clamp it up to the floor so it can't go below `MIN_RATE`. It's two lines. (Stuck? The
@@ -380,7 +358,7 @@ the CNPs stop, the rate **climbs back toward full** (that's `TODO 2`). That rise
 DCQCN **sawtooth** — both halves of your controller working together:
 ```
 PURE_ECN cnp=1001 rate=52428      # cut down while marking
-# ... marker stopped: no new PURE_ECN cuts, and TX events raise the rate back toward 1048576 ...
+# ... marker stopped: no new PURE_ECN cuts, TX events raise the rate back to 1048576 ...
 ```
 
 **Stop** with **Ctrl-C** (SIGINT — the graceful stop).
@@ -427,7 +405,7 @@ point; too sharp and you under-use the link.
 
 <br>
 
-Open [`device/algo/rtt_template.c`](doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L54) and change the
+Open [`device/algo/rtt_template.c`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants/blob/main/doca-2/doca-pcc-ecn/device/algo/rtt_template.c#L54) and change the
 `900` in `ECN_CNP_DEC_FACTOR` (near the top of the file). Try a gentler reaction first, rebuild, and
 re-run Stage 1:
 ```c
@@ -447,8 +425,8 @@ fewer CNPs, a shallower queue. The tuned sweet spot on our testbed was **×0.90*
 > **INFO — the surprising bit.** The rate *set-point* averaged about the same across all of these,
 > yet goodput ranged from 68 to 88 Gb/s. Goodput is governed by **queue depth and retransmissions**,
 > not the average rate — which is why a *sharper* cut (shallower queue, fewer drops) can *raise*
-> goodput. The [`tune_ecn.py`](doca-2/doca-pcc-ecn/tune_ecn.py) script and
-> [`doca_pcc_ecn_sweep.pdf`](doca-2/doca-pcc-ecn/doca_pcc_ecn_sweep.pdf) sweep this automatically.
+> goodput. We have a script that sweeps this automatically and plots the whole curve — ask an
+> organiser if you would like to see it.
 
 Put `900` back when you're done to restore the tuned controller.
 
@@ -483,7 +461,8 @@ Put `900` back when you're done to restore the tuned controller.
   marker (`doca_flow_ecn_pcap --percent 100`) is running so packets are CE-marked, and that traffic
   is actually flowing. (If the controller's output is just too chatty to spot them, reload it with
   `| grep --line-buffered PURE_ECN` appended to see only that trace.)
-- **Stop it gracefully with Ctrl-C** in its terminal (SIGINT) — or `sudo pkill -INT -x doca_pcc_ecn_rp`
+- **Stop it gracefully with Ctrl-C** in its terminal (SIGINT), or with
+  `sudo pkill -INT -x doca_pcc_ecn_rp`
   from another terminal. A hard `kill -9` (or `docker rm -f`) leaves a "ghost" program loaded on the
   DPA that blocks the next run until a chip reset.
 - **Run it in the foreground** (as shown), so its output prints live on the terminal. Launched in the

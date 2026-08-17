@@ -1,0 +1,72 @@
+/* The path one event takes from the NIC to the handler a participant writes, and where the other
+ * events land. Replaces the second ASCII block in guides/doca-pcc.md (Part B).
+ *
+ * Top-down, not left-to-right: it is a call chain that fans out once, and the fan-out reads as a
+ * branch only when the branches sit side by side under the thing that chose between them.
+ *
+ * The guide introduces this as "the path a CNP takes to the code you'll write", so the CNP leg is
+ * drawn dark and the other two light -- weight of line means "this is the walked path", nothing
+ * else. Deliberately NOT dashed: dashed already means "miss forward" in the DOCA Flow guide's
+ * figures, and these two documents are read back to back.
+ *
+ * Blue = you write it, grey = given, matching tutorial-flow-pipeline.dot. The two TODO handlers are
+ * the only blue boxes, which is the whole point of the figure.
+ *
+ * Handler and file names must match device/algo/rtt_template.c and device/rp_main.c as SHIPPED to
+ * participants (the renamed exercise), not our solution of the same name.
+ */
+digraph pcc_event_dispatch {
+  rankdir=TB;
+  fontname="Helvetica";
+  bgcolor="transparent";
+  nodesep=0.32;
+  ranksep=0.42;
+  node [fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9, color="#666666", arrowsize=0.7];
+
+  /* Endpoints as bare text, so only the code reads as boxes. */
+  node [shape=plaintext];
+  arrival [label=<<B>a CNP arrives at the NIC</B><BR/><FONT POINT-SIZE="9">the receiver echoing back your Part 1 CE mark</FONT>>];
+  limiter [label=<<FONT POINT-SIZE="10">the NIC programs this flow's hardware rate limiter to that value</FONT>>];
+
+  /* Given to you. */
+  node [shape=box, style="rounded,filled", color="#a8a8a8", fillcolor="#ededed",
+        margin="0.16,0.09"];
+  entry    [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
+                     <TR><TD><B>doca_pcc_dev_user_algo(</B>algo_ctxt, event, attr, results<B>)</B></TD></TR>
+                     <TR><TD><FONT POINT-SIZE="8" COLOR="#777777">rp_main.c &nbsp;·&nbsp; algo_ctxt = this flow's saved state &nbsp;·&nbsp; results = where the new rate goes</FONT></TD></TR>
+                   </TABLE>>];
+  dispatch [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
+                     <TR><TD><B>rtt_template_algo(</B>event, …<B>)</B></TD></TR>
+                     <TR><TD><FONT POINT-SIZE="8" COLOR="#777777">rtt_template.c &nbsp;·&nbsp; reads the event's ev_type, then routes on it</FONT></TD></TR>
+                   </TABLE>>];
+  other    [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
+                     <TR><TD>new flow / NACK / …</TD></TR>
+                     <TR><TD><FONT POINT-SIZE="8" COLOR="#777777">handled for you</FONT></TD></TR>
+                   </TABLE>>];
+
+  /* Yours. */
+  node [color="#7f9db9", fillcolor="#dce9f6"];
+  tx  [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
+                <TR><TD><B>rtt_template_handle_roce_tx()</B></TD></TR>
+                <TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">TODO 2 — raise the rate</FONT></TD></TR>
+              </TABLE>>];
+  cnp [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
+                <TR><TD><B>rtt_template_handle_roce_cnp()</B></TD></TR>
+                <TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">TODO 1 — cut the rate</FONT></TD></TR>
+              </TABLE>>];
+
+  /* The walked path: dark. */
+  arrival  -> entry    [color="#333333", label=<<FONT POINT-SIZE="9"> the NIC coalesces events, then calls your entry point<BR ALIGN="LEFT"/> once, for this flow<BR ALIGN="LEFT"/></FONT>>];
+  entry    -> dispatch [color="#333333"];
+  dispatch -> cnp      [color="#333333", label=" ev_type == ROCE_CNP "];
+  cnp      -> limiter  [color="#333333"];
+
+  /* Everything else the dispatch can pick: same shape, lighter, no story attached. */
+  dispatch -> tx    [color="#aaaaaa", label=" ev_type == ROCE_TX "];
+  dispatch -> other [color="#aaaaaa"];
+  tx       -> limiter [color="#aaaaaa"];
+  other    -> limiter [color="#aaaaaa"];
+
+  { rank=same; tx; cnp; other; }
+}

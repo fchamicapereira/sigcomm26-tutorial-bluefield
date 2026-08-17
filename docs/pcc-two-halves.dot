@@ -1,0 +1,73 @@
+/* Where a DOCA PCC program actually runs: a loader on the Arm cores, the algorithm on the DPA.
+ *
+ * Replaces the ASCII block that opened Part A of guides/doca-pcc.md. Inconsolata has no box-drawing
+ * glyphs, so that block was losing every one of its lines in the PDF; more to the point, the guides
+ * already draw their figures with dot (see tutorial-flow-pipeline.dot) and this now matches.
+ *
+ * The one idea it has to land: the host program does NOT run the algorithm. It uploads it and then
+ * sits there. Everything inside the NIC box happens per packet, without the Arm cores. Hence the
+ * single "loads" edge crossing between the two clusters, and nothing else.
+ *
+ * Blue = the code a participant writes, matching tutorial-flow-pipeline.dot. Only your_algo() is
+ * blue: the loader is given, and the rate limiter is hardware.
+ */
+digraph pcc_two_halves {
+  rankdir=LR;
+  fontname="Helvetica";
+  bgcolor="transparent";
+  nodesep=0.30;
+  ranksep=0.55;
+  compound=true;
+  node [fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9, color="#666666", arrowsize=0.7];
+
+  subgraph cluster_host {
+    label=<<FONT POINT-SIZE="10"><B>HOST</B> — the Arm cores (control plane)</FONT>>;
+    labeljust="l";
+    fontname="Helvetica";
+    color="#c8c8c8";
+    style="rounded";
+    margin=12;
+
+    /* Grey: given to you. */
+    loader [shape=box, style="rounded,filled", color="#a8a8a8", fillcolor="#ededed",
+            margin="0.16,0.10",
+            label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
+                     <TR><TD ALIGN="LEFT"><B>doca_pcc_ecn_rp</B></TD></TR>
+                     <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="9">opens the PCC context</FONT></TD></TR>
+                     <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="9">uploads the DPA program</FONT></TD></TR>
+                     <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="9">prints logs, stays running</FONT></TD></TR>
+                   </TABLE>>];
+  }
+
+  subgraph cluster_nic {
+    label=<<FONT POINT-SIZE="10"><B>NIC hardware</B> (data plane)</FONT>>;
+    labeljust="l";
+    fontname="Helvetica";
+    color="#c8c8c8";
+    style="rounded";
+    margin=12;
+
+    /* Blue: yours. This is the only box in the figure a participant edits. */
+    algo [shape=box, style="rounded,filled", color="#7f9db9", fillcolor="#dce9f6",
+          margin="0.16,0.10",
+          label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
+                   <TR><TD ALIGN="LEFT">DPA cores run <B>YOUR algorithm</B></TD></TR>
+                   <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="9">your_algo() runs once per EVENT</FONT></TD></TR>
+                 </TABLE>>];
+
+    limiter [shape=box, style="rounded,filled", color="#a8a8a8", fillcolor="#ededed",
+             margin="0.16,0.08",
+             label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">
+                      <TR><TD>per-flow <B>RATE LIMITER</B></TD></TR>
+                    </TABLE>>];
+  }
+
+  /* Bare text, so only the two programs and the limiter read as boxes. */
+  events [shape=plaintext,
+          label=<<FONT POINT-SIZE="9">events<BR/>a packet sent, a CNP, …</FONT>>];
+
+  loader -> algo    [label=" loads ", lhead=cluster_nic, ltail=cluster_host];
+  events -> algo    [style=dashed];
+  algo   -> limiter [label=" results-&gt;rate "];
+}
