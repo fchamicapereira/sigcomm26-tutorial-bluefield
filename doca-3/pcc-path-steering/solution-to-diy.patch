@@ -1,0 +1,166 @@
+--- a/steering/steer.c
++++ b/steering/steer.c
+@@ -733,51 +733,8 @@
+ 	struct doca_flow_port *port, struct doca_flow_pipe *dispatch_target,
+ 	uint8_t random_bits, struct doca_flow_pipe_entry *bucket_entry[LEGACY_RANDOM_BUCKETS])
+ {
+-	const uint32_t nr_entries = 1u << random_bits;
+-	struct doca_flow_match match_mask = {0};
+-	struct doca_flow_actions set_bucket = {0};
+-	struct doca_flow_actions *actions_arr[1] = {&set_bucket};
+-	struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = dispatch_target};
+-	struct doca_flow_pipe_cfg *cfg;
+-	struct doca_flow_pipe *pipe;
+-	doca_error_t err;
+-
+-	match_mask.parser_meta.random = UINT16_MAX;
+-	set_bucket.meta.u32[4] = UINT32_MAX;
+-	err = doca_flow_pipe_cfg_create(&cfg, port);
+-	crash_if_unsuccessful(err, "pipe_cfg_create (legacy random hash)");
+-	err = doca_flow_pipe_cfg_set_name(cfg, "EGRESS_RANDOM_PATH_HASH_6BIT");
+-	crash_if_unsuccessful(err, "pipe_cfg_set_name (legacy random hash)");
+-	err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_HASH);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_type (legacy random hash)");
+-	err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_domain (legacy random hash)");
+-	err = doca_flow_pipe_cfg_set_is_root(cfg, false);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_is_root (legacy random hash)");
+-	err = doca_flow_pipe_cfg_set_nr_entries(cfg, nr_entries);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_nr_entries (legacy random hash)");
+-	err = doca_flow_pipe_cfg_set_match(cfg, NULL, &match_mask);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_match (legacy random hash)");
+-	err = doca_flow_pipe_cfg_set_actions(cfg, actions_arr, NULL, NULL, 1);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_actions (legacy bucket metadata)");
+-	err = doca_flow_pipe_create(cfg, &fwd, NULL, &pipe);
+-	crash_if_unsuccessful(err, "pipe_create (legacy random hash)");
+-	doca_flow_pipe_cfg_destroy(cfg);
+-
+-	memset(&g_classify_batch, 0, sizeof(g_classify_batch));
+-	for (uint32_t bucket = 0; bucket < nr_entries; bucket++) {
+-		struct doca_flow_actions actions = {0};
+-		uint32_t flags = bucket + 1 < nr_entries ? STEER_WAIT_FOR_BATCH : 0;
+-
+-		actions.meta.u32[4] = RTE_BE32(bucket);
+-		err = steer_pipe_hash_add_entry(0, pipe, bucket, 0, &actions, NULL, NULL,
+-			flags, &g_classify_batch, &bucket_entry[bucket]);
+-		crash_if_unsuccessful(err, "pipe_hash_add_entry (legacy random bucket %u)", bucket);
+-	}
+-	process_entries(port, &g_classify_batch, nr_entries, "legacy random hash entries");
+-	DOCA_LOG_INFO("Legacy random HASH ready: %u bits, %u immutable metadata buckets",
+-		random_bits, nr_entries);
+-	return pipe;
++	/* TODO 1: Build the DOCA 2.9 immutable random-bucket HASH pipe. */
++	return NULL;
+ }
+ #endif
+ 
+@@ -969,54 +926,14 @@
+ static struct doca_flow_pipe *create_classify_pipe(struct doca_flow_port *port,
+                                                     struct doca_flow_pipe *dispatch_target)
+ {
+-	struct doca_flow_actions set_bucket = {0};
+-	struct doca_flow_actions *actions_arr[1] = {&set_bucket};
+-	struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = dispatch_target};
+-	struct doca_flow_pipe_cfg *cfg;
+-	struct doca_flow_pipe *pipe;
+-	doca_error_t err;
+-
+-	err = doca_flow_pipe_cfg_create(&cfg, port);
+-	crash_if_unsuccessful(err, "pipe_cfg_create (classify)");
+-	err = doca_flow_pipe_cfg_set_name(cfg, "EGRESS_CLASSIFY");
+-	crash_if_unsuccessful(err, "pipe_cfg_set_name (classify)");
+-	err = doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_HASH);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_type (classify)");
+-	err = doca_flow_pipe_cfg_set_domain(cfg, DOCA_FLOW_PIPE_DOMAIN_DEFAULT);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_domain (classify)");
+-	err = doca_flow_pipe_cfg_set_is_root(cfg, false);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_is_root (classify)");
+-	err = doca_flow_pipe_cfg_set_nr_entries(cfg, PATH_SHARE_BUCKETS);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_nr_entries (classify)");
+-	set_bucket.meta.u32[4] = UINT32_MAX;
+-	err = doca_flow_pipe_cfg_set_hash_map_algorithm(
+-		cfg, DOCA_FLOW_PIPE_HASH_MAP_ALGORITHM_RANDOM);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_hash_map_algorithm (classify random)");
+-	err = doca_flow_pipe_cfg_set_actions(cfg, actions_arr, NULL, NULL, 1);
+-	crash_if_unsuccessful(err, "pipe_cfg_set_actions (classify bucket metadata)");
+-	err = doca_flow_pipe_create(cfg, &fwd, NULL, &pipe);
+-	crash_if_unsuccessful(err, "pipe_create (classify)");
+-	doca_flow_pipe_cfg_destroy(cfg);
+-	return pipe;
++	/* TODO 2: Build the DOCA 3.x native RANDOM HASH pipe. */
++	return NULL;
+ }
+ 
+ static void add_classify_entries(struct doca_flow_pipe *pipe, struct doca_flow_port *port)
+ {
+-	doca_error_t err;
+-
+-	memset(&g_classify_batch, 0, sizeof(g_classify_batch));
+-	for (uint32_t idx = 0; idx < PATH_SHARE_BUCKETS; idx++) {
+-		struct doca_flow_actions actions = {0};
+-		struct doca_flow_pipe_entry *hash_entry;
+-		uint32_t flags = idx == PATH_SHARE_BUCKETS - 1 ? 0 : STEER_WAIT_FOR_BATCH;
+-
+-		actions.meta.u32[4] = RTE_BE32(idx);
+-		err = steer_pipe_hash_add_entry(0, pipe, idx, 0, &actions, NULL, NULL,
+-		                                      flags, &g_classify_batch, &hash_entry);
+-		crash_if_unsuccessful(err, "pipe_hash_add_entry (classify bucket=%u)", idx);
+-	}
+-	process_entries(port, &g_classify_batch, PATH_SHARE_BUCKETS, "classify hash entries");
+-	DOCA_LOG_INFO("Classify random-bucket pipe ready: HASH/random writes bucket to meta.u32[4]");
++	/* TODO 3: Install the 64 immutable DOCA 3.x HASH entries. */
++	return;
+ }
+ #endif
+ 
+@@ -1925,48 +1842,8 @@
+  * assignment crosses the old/new boundary. No entry is added or removed. */
+ static void apply_path_share(uint32_t path0_share)
+ {
+-	if (g_steer.opts.force_path >= 0)
+-		return;
+-	if (g_steer.classify_pipe == NULL || path0_share > PATH_SHARE_BUCKETS ||
+-	    path0_share == g_steer.applied_path0_share)
+-		return;
+-
+-	uint32_t old_share = g_steer.applied_path0_share;
+-	for (uint32_t bucket = 0; bucket < PATH_SHARE_BUCKETS; bucket++) {
+-		uint8_t wanted_path = bucket < path0_share ? 0 : 1;
+-		if (g_steer.classify_bucket_path[bucket] == wanted_path)
+-			continue;
+-
+-		memset(&g_classify_batch, 0, sizeof(g_classify_batch));
+-		struct doca_flow_fwd fwd = {
+-			.type = DOCA_FLOW_FWD_PIPE,
+-			.next_pipe = g_steer.classify_target[wanted_path],
+-		};
+-		doca_error_t err = steer_pipe_update_entry(0, g_steer.classify_dispatch_pipe, 0,
+-						 NULL, NULL, &fwd, STEER_NO_WAIT,
+-						 g_steer.classify_entry[bucket]);
+-		if (err == DOCA_SUCCESS)
+-			err = doca_flow_entries_process(g_steer.port, 0, 10000, 1);
+-		if (err != DOCA_SUCCESS || g_classify_batch.failure ||
+-		    g_classify_batch.nb_processed != 1) {
+-			DOCA_LOG_WARN("path-share update failed at bucket %u (%s); will retry",
+-			              bucket, doca_error_get_descr(err != DOCA_SUCCESS ? err : DOCA_ERROR_BAD_STATE));
+-			return;
+-		}
+-		g_steer.classify_bucket_path[bucket] = wanted_path;
+-	}
+-
+-	/* Processing one completion per update can return before HWS has retired
+-	 * the replaced rule version. Drain those internal operations now so pipe
+-	 * teardown never races a pending replacement. */
+-	doca_error_t drain_err = doca_flow_entries_process(g_steer.port, 0, 10000, 0);
+-	if (drain_err != DOCA_SUCCESS)
+-		DOCA_LOG_WARN("failed to drain path-share replacements: %s",
+-		              doca_error_get_descr(drain_err));
+-
+-	g_steer.applied_path0_share = path0_share;
+-	DOCA_LOG_INFO("PCC path share applied: path0 %u->%u/64 path1=%u/64",
+-	              old_share, path0_share, PATH_SHARE_BUCKETS - path0_share);
++	/* TODO 4: Update only the dispatch entries that cross the path-share boundary. */
++	return;
+ }
+ 
+ doca_error_t steer_start(const struct steer_opts *opts)
