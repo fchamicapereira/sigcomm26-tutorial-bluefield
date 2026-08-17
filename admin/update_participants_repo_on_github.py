@@ -26,8 +26,8 @@ Layout it produces:
     doca-2/                       flow exercise (from doca_flow_template.c) + pcc exercise (from
                                   doca-pcc-ecn/device/algo/rtt_template_exercise.c)
     doca-3/                       ditto for the DOCA 3 tree (pcc only if it has a template)
-    tutorial-doca-pcc.md          Part II hands-on guide (Markdown)
-    *.pdf                         the rendered guides, at the ROOT (see GUIDES)
+    *.pdf                         the rendered guides, at the ROOT (see GUIDES): tailscale,
+                                  doca-flow (Part I) and doca-pcc (Part II)
     scripts/                      run_server.sh, run_client.sh, benchmark.sh
     .vscode/                      IntelliSense paths for the DOCA/DPDK headers on the card
     .clang-format
@@ -79,27 +79,33 @@ SCRIPTS = ["run_server.sh", "run_client.sh", "benchmark.sh"]
 # does NOT build them, and copying a stale PDF is silent.
 #
 # They land at the ROOT of the participant repo, not in a guides/ subdirectory: a participant who
-# has just cloned should see the thing they are meant to read without opening a folder first, and
-# the two tutorial-*.md guides are already there. "guides" stays in MANAGED so an earlier
-# checkout's guides/ directory is deleted rather than left behind holding stale copies.
-GUIDES = ["tailscale.pdf", "doca-flow.pdf"]
+# has just cloned should see the thing they are meant to read without opening a folder first.
+# "guides" stays in MANAGED so an earlier checkout's guides/ directory is deleted rather than left
+# behind holding stale copies.
+#
+# Both hands-on parts now ship as rendered PDFs. doca-pcc.pdf replaced tutorial-doca-pcc.md, which
+# was the Part II guide in Markdown; see TUTORIAL_GUIDES below for what that cost and what it buys.
+GUIDES = ["tailscale.pdf", "doca-flow.pdf", "doca-pcc.pdf"]
 
 # Participant-only files kept here as real files rather than generated inline, so they can be
 # reviewed and edited directly. Mapped to their destination in the participant repo.
 ASSETS = {"participants/c_cpp_properties.json": ".vscode/c_cpp_properties.json"}
 
-# Interactive hands-on guides (GitHub-flavoured Markdown, with <details> collapsibles and links
-# into the source). They ship to the participant repo ROOT, unrendered, so GitHub renders the
-# collapsibles and the doca-2/... source links resolve. HTML author-comments are stripped.
+# Hands-on guides shipped as raw GitHub-flavoured Markdown rather than as a rendered PDF. EMPTY
+# NOW, and kept because the machinery is the only record of the trade-off.
 #
-# tutorial-doca-flow.md is deliberately NOT here. It is an earlier draft of the DOCA Flow guide and
-# describes an exercise that no longer exists -- four TODOs, mirroring, --pcap, Stage 1/Stage 2 --
-# so shipping it alongside doca-flow.pdf would just contradict it. The file stays in this repo.
+# Both parts used to ship differently: Part I as doca-flow.pdf, Part II as tutorial-doca-pcc.md.
+# Markdown buys collapsible <details> blocks and doca-2/... links that resolve on GitHub; a PDF
+# buys real figures, page numbers, and one consistent artefact per part. Part II is now
+# guides/doca-pcc.md -> doca-pcc.pdf, so both parts match and neither depends on GitHub's renderer.
 #
-# It was the only guide that needed doca_flow_template.c rewritten to the participant's filename,
-# so render_guide() no longer takes that flag; anything added here should be written against the
-# names a participant actually sees.
-TUTORIAL_GUIDES = ["tutorial-doca-pcc.md"]
+# tutorial-doca-flow.md was never here: it is an earlier draft of the Part I guide describing an
+# exercise that no longer exists -- four TODOs, mirroring, --pcap, Stage 1/Stage 2. Both
+# tutorial-*.md files stay in this repo and are listed in OBSOLETE so existing checkouts lose them.
+#
+# Anything added back here must be written against the names a participant actually sees: the flow
+# program is doca_flow_ecn.c over there, not doca_flow_template.c.
+TUTORIAL_GUIDES = []
 
 # Top-level directories this script owns: deleted and rewritten on every run. Anything else in the
 # participant repo survives.
@@ -113,11 +119,17 @@ MANAGED_FILES = [".clang-format"]
 #   doca-N-solutions/       solutions stopped shipping
 #   guides/                 the rendered PDFs moved to the root
 #   tutorial-doca-flow.md   superseded by doca-flow.pdf, and now contradicts it
+#   tutorial-doca-pcc.md    superseded by doca-pcc.pdf
+#
+# The two tutorial-*.md entries matter more than the rest: they are the only OBSOLETE paths that a
+# participant could mistake for current material, because they read as guides and say nothing about
+# being superseded. Leaving one behind means somebody follows the wrong instructions.
 #
 # Drop an entry once no participant checkout can still be carrying it.
 OBSOLETE = [f"{v}-solutions" for v in VERSIONS] + [
     "guides",
     "tutorial-doca-flow.md",
+    "tutorial-doca-pcc.md",
 ]
 
 

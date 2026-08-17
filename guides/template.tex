@@ -155,6 +155,56 @@ $common.latex()$
   Scale          = MatchLowercase,
 ]
 
+% Box-drawing, arrow and shape glyphs, which Inconsolata does not have a single one of.
+%
+% This matters more than it looks. xelatex DROPS a character its font cannot render, warns only on
+% stderr, and still exits 0 -- so an ASCII diagram in a fenced code block loses every one of its
+% lines and the PDF builds "successfully" with a hole where the figure was. `make check` is what
+% catches it; this is what fixes it. (Measured: guides/doca-pcc.md dropped 199 glyphs from its two
+% ASCII diagrams before this block existed.)
+%
+% XeLaTeX has no automatic font fallback -- that is a LuaLaTeX feature -- so every character has to
+% be mapped by hand. DejaVu Sans Mono has all of them and ships with TeX Live in the same
+% collection-fontsextra that already supplies Inconsolata, so this adds no new install requirement.
+%
+% newunicodechar makes each character active, and that DOES reach inside fancyvrb's Verbatim, which
+% is where pandoc puts fenced code blocks: fancyvrb rewrites catcodes for the ASCII specials but
+% leaves everything above 127 alone. Verified on a real code block, not assumed.
+%
+% The scale is chosen to match ADVANCE WIDTHS, not x-heights, and that is the whole trick for ASCII
+% art. DejaVu Sans Mono's cell is 0.6021em, Inconsolata's is 0.5000em, so an unscaled fallback runs
+% 20% wide: box-drawing verticals drift right of the column they belong to, and a 90-column diagram
+% stops fitting the text block. 0.5000/0.6021 = 0.8305 puts one fallback glyph in exactly one
+% Inconsolata cell, so the grid holds and the art lines up. Scale=MatchLowercase would look tidier
+% on a mixed prose line and wreck every diagram; diagrams are the reason this block exists.
+\usepackage{newunicodechar}
+\newfontfamily\fallbackmono{DejaVuSansMono}[
+  Extension   = .ttf,
+  UprightFont = *,
+  BoldFont    = *-Bold,
+  Scale       = 0.8305,
+]
+\newcommand{\fbmono}[1]{{\fallbackmono #1}}
+% Listed explicitly rather than looped, so grepping for a character that came out wrong finds it.
+\newunicodechar{─}{\fbmono{─}}  \newunicodechar{│}{\fbmono{│}}
+\newunicodechar{┌}{\fbmono{┌}}  \newunicodechar{┐}{\fbmono{┐}}
+\newunicodechar{└}{\fbmono{└}}  \newunicodechar{┘}{\fbmono{┘}}
+\newunicodechar{├}{\fbmono{├}}  \newunicodechar{┤}{\fbmono{┤}}
+\newunicodechar{┬}{\fbmono{┬}}  \newunicodechar{┴}{\fbmono{┴}}
+\newunicodechar{┼}{\fbmono{┼}}
+\newunicodechar{═}{\fbmono{═}}  \newunicodechar{║}{\fbmono{║}}
+\newunicodechar{╔}{\fbmono{╔}}  \newunicodechar{╗}{\fbmono{╗}}
+\newunicodechar{╚}{\fbmono{╚}}  \newunicodechar{╝}{\fbmono{╝}}
+\newunicodechar{▲}{\fbmono{▲}}  \newunicodechar{►}{\fbmono{►}}
+\newunicodechar{▼}{\fbmono{▼}}  \newunicodechar{◄}{\fbmono{◄}}
+\newunicodechar{★}{\fbmono{★}}  \newunicodechar{●}{\fbmono{●}}
+\newunicodechar{○}{\fbmono{○}}  \newunicodechar{■}{\fbmono{■}}
+\newunicodechar{□}{\fbmono{□}}
+\newunicodechar{→}{\fbmono{→}}  \newunicodechar{←}{\fbmono{←}}
+\newunicodechar{↑}{\fbmono{↑}}  \newunicodechar{↓}{\fbmono{↓}}
+\newunicodechar{↔}{\fbmono{↔}}  \newunicodechar{≈}{\fbmono{≈}}
+\newunicodechar{✓}{\fbmono{✓}}  \newunicodechar{✗}{\fbmono{✗}}
+
 \definecolor{rule}{HTML}{C8C8C8}     % hairlines: the footer rule and the code-block frame
 \definecolor{muted}{HTML}{555555}
 \definecolor{shell}{HTML}{F4F4F4}

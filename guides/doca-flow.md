@@ -73,18 +73,27 @@ title: "Part 1 — Programming the data plane with DOCA Flow"
 
   STILL OPEN -- all of it needs a card
 
-  0. NOTHING HERE HAS BEEN COMPILED. doca_flow_solution.c is new code in both trees and
-     doca_flow_template.c is generated from it; neither has seen a DOCA header. Build both before
-     the session.
-  1. Every counter line quoted in Part D is written in the shape the code produces, not pasted
-     from a real run. Replace with real pastes.
-  2. The five `defined but not used` warnings D.1 promises are reasoned from -Wall semantics, not
-     observed. meson's default warning_level=1 gives -Wall; the exercise target adds
+  0. DONE 2026-08-17. WALKED END TO END on bf3-ulisbon-1 (DOCA 2.9), from ssh to --percent 0, out
+     of a freshly synced participant repo. Every TODO was solved from its own numbered recipe
+     WITHOUT consulting the solution -- so the recipes are sufficient, which is the property that
+     matters in a timed session. Results: as-shipped 92.60 Gb/s with counters at 0; D.1 the same
+     through PORT_DEMUX; D.2 100% marked at line rate; D.3 split at 50/25/6.25/0. Ctrl-C-and-
+     restart behaves as D.1 describes. benchmark.sh needed ZERO restarts across the whole walk.
+     doca-3 is COMPILE-ONLY (bf3-uwashington-1, 3.1): both template and solution build clean with
+     the same five warnings, but nothing has been RUN on a 3.x card. Do that before the session.
+  1. DONE 2026-08-17. Part A's results table, D.1's whole startup block, and the D.2/D.3 counter
+     lines are now real pastes from that walk. The D.1 block's line numbers (213/693/383/401) are
+     the generated template's -- they move whenever regen_templates.py changes it, so re-paste
+     rather than hand-patching if the file is regenerated.
+  2. DONE 2026-08-17. Confirmed FIVE, exactly as promised, and they clear 5 -> 3 -> 0 across
+     D.1 and D.2. meson's default warning_level=1 gives -Wall; the exercise target adds
      -Wno-unused-variable (see doca-flow/meson.build) so the ~20 unused-variable warnings from the
-     scaffolded structs stay out of the way. Confirm the count.
-  3. benchmark.sh resolves ttyplot as $SCRIPT_DIR/ttyplot/ttyplot; in the participant repo the
-     script lands in scripts/, so it looks for scripts/ttyplot/ttyplot. Part A tells participants to
-     use benchmark.sh first, so confirm setup_ttyplot.sh puts it where the synced copy will look.
+     scaffolded structs stay out of the way.
+  3. DONE. ttyplot is installed system-wide on all twelve (fleet.py deps --install), so PATH
+     resolution wins and the repo-local fallback never runs. benchmark.sh also now supervises both
+     ib_write_bw ends and restarts them when a half-written pipeline kills the client -- which it
+     does permanently, RC retry-exceeded, with the server left unusable too. Without that, "keep
+     benchmark.sh running throughout" was false for most of Part D.
   4. VERIFIED ON HARDWARE 2026-08-16, all twelve cards, via a read-only probe over fleet.py.
      The loopback IS already set up everywhere (ns0 + ns1 present), so Part A is right that
      participants never run setup_roce_loopback.sh.
@@ -173,7 +182,7 @@ $ ssh s26t@bf3-ulisbon-1
 # Part A — The card, and getting traffic onto it
 
 Your card has **two ports reachable to each other (`p0` and `p1`)**, so whatever leaves `p1` arrives at `p0`,
-and vise-versa.
+and vice versa.
 That makes a single card behave like a small two-node network talking to itself.
 In this tutorial, we will be using two endpoints composed of
 lightweight virtual NICs called **SFs** (sub-functions), one per port, each in its own network
@@ -275,8 +284,8 @@ sudo ip netns exec ns1 ib_write_bw -d mlx5_3 -R -x 1 -F 10.0.0.1 --report_gbits
 **You should see** a results table appear on both terminals, with the throughput closely matching
 the card's line rate:
 ```
- #bytes     #iterations   BW peak[Gb/sec]   BW average[Gb/sec]   MsgRate[Mpps]
- 65536      529037          0.00              92.46                0.176344
+ #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]
+ 65536      5000             92.58              92.56                0.176543
 ```
 To avoid retyping the flags, the repo wraps these as scripts: `./scripts/run_server.sh` and
 `./scripts/run_client.sh` (one per terminal), or **`./scripts/benchmark.sh`**, which starts both
@@ -330,10 +339,10 @@ ships with a root pipe that forwards packets to the server; the exercise is to p
 
 The repository (`/home/s26t/sigcomm26-tutorial-bluefield-participants`) has one directory per DOCA release:
 `doca-2` and `doca-3`. Pick the relevant one for your chosen Bluefield. In this part of the tutorial, you
-will be editting the `doca-flow/doca_flow_ecn.c` file.
+will be editing the `doca-flow/doca_flow_ecn.c` file.
 
 Everything in `doca-2/doca-flow/doca_flow_ecn.c` is done except for three function bodies, marked
-`TODO 1` to `TODO 3`. The shipped the program already forwards traffic.
+`TODO 1` to `TODO 3`. The program already forwards traffic as shipped.
 
 Laid out logically, the `doca_flow_ecn.c` file is logically separated into four different phases.
 We use python-like pseudo-code to show you these logical components:
@@ -380,7 +389,7 @@ stays in the pipeline either way: it is where `MARK` and `PASS` send anything th
 # Part D — The actual tutorial exercise
 
 We use `meson` and `ninja` to setup and build our applications. You only need to setup once, but
-you do need to recompile with `ninja` everytime you make changes to your program. Remember,
+you do need to recompile with `ninja` every time you make changes to your program. Remember,
 replace `doca-2` with `doca-3` if you are using a Bluefield equipped with DOCA version 3.x.
 
 ```bash
@@ -421,19 +430,19 @@ EAL: Multi-process socket /var/run/dpdk/rte/mp_socket
 EAL: Selected IOVA mode 'VA'
 TELEMETRY: No legacy callbacks, legacy socket not created
 EAL: Probe PCI driver: mlx5_pci (15b3:a2dc) device: 0000:03:00.0 (socket -1)
-[21:03:01:006330][2652007][DOCA][INF][doca_flow_ecn.c:205][configure_and_start_dpdk_port] mbuf data room 9344 bytes (jumbo-capable, max frame 9216)
-[21:03:01:962242][2652007][DOCA][WRN][engine_model.c:92][adapt_queue_depth] adapting queue depth to 128.
-[21:03:02:988380][2652007][DOCA][INF][doca_flow_ecn.c:640][create_root_pipe_nop] No-op forwarder ready: wire <-> receiver SF, nothing marked
-[21:03:02:988416][2652007][DOCA][INF][doca_flow_ecn.c:375][log_startup] Marking ALL IPv4 -- Ctrl-C to stop
-[21:03:03:003181][2652007][DOCA][INF][doca_flow_ecn.c:393][run_report_loop] CE marked: 0, passthrough: 0 (0% marked)
-[21:03:04:003060][2652007][DOCA][INF][doca_flow_ecn.c:393][run_report_loop] CE marked: 0, passthrough: 0 (0% marked)
+[01:49:05:767697][2777301][DOCA][INF][doca_flow_ecn.c:213][configure_and_start_dpdk_port] mbuf data room 9344 bytes (jumbo-capable, max frame 9216)
+[01:49:06:723850][2777301][DOCA][WRN][engine_model.c:92][adapt_queue_depth] adapting queue depth to 128.
+[01:49:07:756283][2777301][DOCA][INF][doca_flow_ecn.c:693][create_root_pipe_nop] No-op forwarder ready: wire <-> receiver SF, nothing marked
+[01:49:07:756313][2777301][DOCA][INF][doca_flow_ecn.c:383][log_startup] Marking ALL IPv4 -- Ctrl-C to stop
+[01:49:08:004432][2777301][DOCA][INF][doca_flow_ecn.c:401][run_report_loop] CE marked: 0, passthrough: 0 (0% marked)
+[01:49:09:004436][2777301][DOCA][INF][doca_flow_ecn.c:401][run_report_loop] CE marked: 0, passthrough: 0 (0% marked)
 ```
 
 Currently, the pipeline is pre-configured with a root pipe that simply forwards packets from the wire
 straight to the server, and performing no additional operation. This pipe is created in the function
 `create_root_pipe_nop()`.
 
-**Now stop it with Ctrl-C, leaving the traffic running.** Throughput carries on unchanged, asside from
+**Now stop it with Ctrl-C, leaving the traffic running.** Throughput carries on unchanged, aside from
 a small dip in throughput as the card falls back to its default OVS forwarding. Start the program again
 and it takes over (notice again the small temporary dip in throughput).
 
@@ -517,7 +526,8 @@ this is essentially the same pipe but with a counter and an action added.
 Rebuild and run with `--percent 100`. Traffic should be at line rate, and now the counter climbs:
 
 ```
-CE marked: 57060637, passthrough: 0 (100% marked)
+CE marked: 69144890, passthrough: 0 (100% marked)
+CE marked: 80447146, passthrough: 0 (100% marked)
 ```
 
 **You just programmed the Bluefield to rewrite packet headers in hardware**, at line rate, with your
@@ -547,7 +557,8 @@ The startup banner prints the fraction actually achieved, rounded down to a powe
 against the counter line, which now has traffic on both sides:
 
 ```
-CE marked: 28530318, passthrough: 28530319 (50% marked)
+CE marked: 31745931, passthrough: 31745054 (50% marked)
+CE marked: 37396355, passthrough: 37398022 (50% marked)
 ```
 
 Try `--percent 25` and `--percent 10` and watch the split follow.
@@ -578,8 +589,10 @@ Ask an organiser if you are stuck. That is what we are here for.
   wire, is missing or points the wrong way. RoCE needs both directions.
 - **A pipe fails to install** — check the status after `doca_flow_entries_process()`, per step 5 of
   the shape in Part B. Success from the add-entry call alone proves nothing.
-- **A new run says the device is busy** — only one DOCA Flow program can own the switch at a time.
-  Stop the previous one; if it was killed hard, `sudo pkill -f doca_flow`.
+- **`EAL initialization failed`, then `argp: doca_argp_start(...)`** — a copy of the program is
+  already running, and only one DOCA Flow program can own the switch at a time. This is the one
+  case where the last line misleads: it blames `argp`, but nothing is wrong with your arguments.
+  Stop the other instance; if it was killed hard, `sudo pkill -f doca_flow`.
 - **`defined but not used` warnings** — that is the list of functions you have not wired up yet.
   Expect five before you start; they clear as you uncomment in D.1 and D.2.
 
