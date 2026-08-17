@@ -22,7 +22,6 @@ The deck itself is DECK, below: one entry per slide, plain HTML. Add slides ther
 """
 
 import base64
-import io
 import json
 import pathlib
 import shutil
@@ -39,9 +38,14 @@ OUT = HERE / "hands-on.html"
 # says so at the end, so an unreplaced link is loud rather than something you meet on the projector.
 TODO_URL = "https://github.com/REPLACE-ME"
 
-# Where people are sent to get onto a card. NOT the participants repo below -- getting onto a
-# BlueField and reading a part's guide are two different destinations.
-HANDSON_URL = TODO_URL
+# One group per card. The names come from admin/machines.txt -- the fleet's own list, the same one
+# admin/fleet.py drives -- so a card added or pulled changes the slide by itself and a group can
+# never be sent to a machine that is not in the fleet.
+MACHINES = HERE.parent / "admin" / "machines.txt"
+TAILNET = "tail4f7fd9.ts.net"
+
+# Shown on the slide, so everyone in the room can type it. Rotate it after the tutorial.
+PASSWORD = "Smartnics-Roces-@-Sigcomm"
 
 # The repo participants clone: the one admin/update_participants_repo_on_github.py writes. The
 # per-part guide links derive from it, so a rename is one edit here.
@@ -130,30 +134,6 @@ def logo_uri(ident):
     return uri
 
 
-def qr_uri(url):
-    """The QR, or None. Optional on purpose: a missing encoder should cost you the code, not the
-    deck -- the printed link is still on the slide.
-
-    qrencode if it is installed, segno (pure Python, no root) if not. Same parameters either way:
-    12px modules, 1-module quiet zone, error level M.
-    """
-    if shutil.which("qrencode"):
-        out = HERE / ".qr.tmp.png"
-        subprocess.run(["qrencode", "-o", str(out), "-s", "12", "-m", "1", "-l", "M", url],
-                       check=True)
-        uri = data_uri(out.read_bytes(), "image/png")
-        out.unlink()
-        return uri
-    try:
-        import segno
-    except ImportError:
-        print("  note: no qrencode and no segno, the hands-on slide will show the link with no QR")
-        return None
-    buf = io.BytesIO()
-    segno.make(url, error="m").save(buf, kind="png", scale=12, border=1)
-    return data_uri(buf.getvalue(), "image/png")
-
-
 def pretty(url):
     """A URL as it should be READ off a projector, not as it is typed. The scheme is noise at 30px
     and nobody types it anyway; the href keeps the real thing."""
@@ -199,6 +179,43 @@ def people_row(key):
     return "".join(out)
 
 
+def group_table():
+    """Group N -> the card's Tailscale address, one row per machine in the fleet list.
+
+    Two columns rather than twelve stacked rows: one column is a 620px-wide ribbon down the middle
+    of an 1100px slide, and splitting it fills the frame and buys the vertical room the panel and
+    the password need.
+
+    Every address ends in the same .tail4f7fd9.ts.net/, so the host is set in the link colour and
+    the shared tail is greyed: the eye lands on the part that differs, which is the only part
+    anyone is looking for, and the address is still complete enough to type.
+    """
+    if not MACHINES.exists():
+        die(f"{MACHINES} not found -- the group table is built from the fleet list")
+    names = [n.strip() for n in MACHINES.read_text().splitlines() if n.strip()]
+    if not names:
+        die(f"{MACHINES} is empty -- no groups to put on the slide")
+
+    half = (len(names) + 1) // 2
+    rows = []
+    for r in range(half):
+        cells = []
+        for col, i in enumerate((r, r + half)):
+            gap = " gap" if col else ""
+            if i >= len(names):
+                cells.append(f'<td class="n{gap}"></td><td></td>')
+                continue
+            cells.append(
+                f'<td class="n{gap}">{i + 1}</td>'
+                f'<td class="u"><a href="https://{names[i]}.{TAILNET}/">'
+                f'<b>{names[i]}</b><span class="sfx">.{TAILNET}/</span></a></td>')
+        rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    head = ('<tr class="head"><td>Group</td><td>Address</td>'
+            '<td class="gap">Group</td><td>Address</td></tr>')
+    return f'<div class="panel"><table class="groups">{head}{"".join(rows)}</table></div>'
+
+
 def part(eyebrow, title, shot_name, guide=None, url=None):
     """The two slides every hands-on part gets: where its guide is, then what success looks like.
 
@@ -241,9 +258,6 @@ def part(eyebrow, title, shot_name, guide=None, url=None):
     ]
 
 
-QR = qr_uri(HANDSON_URL)
-QR_IMG = f'<img class="qr" src="{QR}" alt="QR code for {HANDSON_URL}">' if QR else ""
-
 # --- the deck --------------------------------------------------------------------------------
 # One string per slide. Slide 1 mirrors the guides' header block on purpose: same order (what it
 # is, which conference, which tutorial, who runs it) and the same logo-beside-the-name treatment,
@@ -261,9 +275,8 @@ DECK = [
     f"""
     <div class="centred">
       <h2>Let&rsquo;s get you onto a BlueField&#8209;3</h2>
-      <p class="lead">Follow these steps:</p>
-      <p class="url"><a href="{HANDSON_URL}">{pretty(HANDSON_URL)}</a></p>
-      {QR_IMG}
+      {group_table()}
+      <p class="password">Password <code>{PASSWORD}</code></p>
     </div>
     """,
     *part("Part 1", "DOCA Flow", "part1-doca-flow-outcome", guide="doca-flow.pdf"),
@@ -299,7 +312,33 @@ h2{font-family:'BiolinumB',sans-serif;font-weight:700;font-size:62px;color:#111;
    unbroken line people can read off and type beats a bigger one they have to reassemble. */
 .url a{font-family:'Inconsolata',monospace;font-size:30px;color:#4A7AAB;text-decoration:none;
        border-bottom:2px solid rgba(74,122,171,.3);padding-bottom:3px;word-break:break-all}
-.qr{margin-top:36px;height:210px;image-rendering:pixelated}
+
+/* The group table, in a panel so the addresses read as one object to find yourself in rather than
+   loose text on a white field. inline-block keeps the panel exactly as wide as its contents and
+   .centred does the rest. */
+.panel{display:inline-block;margin-top:24px;padding:18px 30px;background:#F7F9FB;
+       border:1px solid #E4E9EE;border-radius:12px}
+.groups{border-collapse:collapse;font-size:25px}
+/* Hairlines at the panel border's own weight: enough to carry the eye across a row and to part
+   the two halves, not enough to read as a grid. The last row drops its rule so the table does not
+   end on a line sitting just above the panel padding. */
+.groups td{padding:9px 0;line-height:1.2;white-space:nowrap;border-bottom:1px solid #E8ECF0}
+.groups tr:last-child td{border-bottom:0}
+.groups .head td{font-family:'Biolinum',sans-serif;font-size:17px;letter-spacing:1.2px;
+                 text-transform:uppercase;color:#111;padding-bottom:10px;
+                 border-bottom:1px solid #D8DFE6}
+.groups .n{font-family:'Biolinum',sans-serif;color:#111;text-align:right;padding-right:16px}
+/* The 44px trough between the columns, split either side of the divider so it stays centred. */
+.groups td:nth-child(2){padding-right:22px}
+.groups .gap{padding-left:22px;border-left:1px solid #E8ECF0}
+/* Not a link colour on the whole address: only the host differs, so only the host is emphasised. */
+.groups .u a{font-family:'Inconsolata',monospace;text-decoration:none}
+.groups .u b{font-weight:400;color:#2C6394}
+.groups .u .sfx{color:#555}
+
+.password{margin-top:26px;font-family:'Biolinum',sans-serif;font-size:30px;color:#555}
+.password code{font-family:'Inconsolata',monospace;font-size:30px;color:#111;background:#F0F3F6;
+                border:1px solid #E0E5EA;border-radius:7px;padding:4px 14px;margin-left:10px}
 
 /* Part slides. The eyebrow carries which part you are in, so the h2 can be the plain name of the
    thing -- "DOCA Flow", not "Part 1: DOCA Flow" wrapped onto two lines. */
@@ -386,6 +425,6 @@ print(f"  wrote {OUT.name}  ({len(DECK)} slides, {kb} KB, self-contained)")
 
 pending = html.count(f'href="{TODO_URL}"')
 if pending:
-    print(f"  TODO: {pending} link(s) still point at {TODO_URL} -- and the QR encodes it as-is")
+    print(f"  TODO: {pending} link(s) still point at {TODO_URL}")
 if "--open" in sys.argv:
     subprocess.run(["open", str(OUT)])
