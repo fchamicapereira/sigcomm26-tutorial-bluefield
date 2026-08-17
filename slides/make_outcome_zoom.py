@@ -61,6 +61,33 @@ JOBS = [
     ),
 ]
 
+# Part 3's logs arrived already cropped out of the terminal, and in two variants: a plain one and a
+# "-fixed" one with regions ringed in red by hand. The plain one is the base; the red rings are only
+# how the interesting lines were pointed out, so red_boxes() reads their coordinates off the -fixed
+# pixels and this redraws them in the Bonus colour on the plain image. Nothing red ships.
+#
+# No magnifier on these, unlike Parts 1 and 2: these crops are already lifted out of the terminal at
+# a size where the text reads, so the slide only has to say WHICH lines matter. Slide 11 shows the
+# pair plain and slide 12 shows it ringed -- the same picture twice, so the second one lands as "look
+# here" rather than as a new screen to re-read.
+MARKED = [
+    dict(out="part3-steering-congestion-marked", src="part3-streering-congestion",
+         ref="part3-streering-congestion-fixed"),
+    dict(out="part3-steering-egress-marked", src="part3-streering-egress",
+         ref="part3-streering-egress-fixed"),
+]
+
+BLUE = (0.35, 0.62, 0.85)   # the Bonus accent, lifted to read over a black terminal
+
+# The pair on one canvas: ingress beside egress, so the observation and the reaction to it are read
+# together. Runs after BELOW, since the second job consumes its output.
+COMBINE = [
+    dict(out="part3-steering-logs", gap=26,
+         srcs=["part3-streering-congestion", "part3-streering-egress"]),
+    dict(out="part3-steering-logs-marked", gap=26,
+         srcs=["part3-steering-congestion-marked", "part3-steering-egress-marked"]),
+]
+
 PAD = 26            # inside the popup, around the magnified pixels
 WHITE = (1, 1, 1)
 
@@ -138,6 +165,85 @@ def compose(job):
           f"{on_slide / chars:.1f}px per character on the slide)")
 
 
+def red_boxes(name):
+    """The annotation rectangles already drawn on an image, found by looking for their red.
+
+    Read off the pixels rather than typed in as coordinates: the boxes were drawn by hand in some
+    other tool, so nobody here knows where they are, and a retake would move them.
+    """
+    pix = fitz.Pixmap(str(IMAGES / f"{name}.png"))
+    n, w, h, s = pix.n, pix.width, pix.height, pix.samples
+
+    def is_red(x, y):
+        i = (y * w + x) * n
+        return s[i] > 150 and s[i + 1] < 90 and s[i + 2] < 90
+
+    bands, run = [], None
+    for y in range(h):
+        if sum(is_red(x, y) for x in range(0, w, 2)) > 3:
+            run = (y, y) if run is None else (run[0], y)
+        elif run is not None:
+            bands.append(run)
+            run = None
+    if run:
+        bands.append(run)
+
+    out = []
+    for y0, y1 in bands:
+        xs = [x for y in (y0, y1) for x in range(w) if is_red(x, y)]
+        out.append(fitz.Rect(min(xs), y0, max(xs), y1 + 1))
+    return out
+
+
+def mark_regions(job):
+    """The log exactly as it came, with its interesting lines ringed in the Bonus colour."""
+    src = IMAGES / f"{job['src']}.png"
+    pix = fitz.Pixmap(str(src))
+    sw, sh = pix.width, pix.height
+
+    # the -fixed variant was re-saved and can differ by a pixel or two, so map its coordinates
+    ref = fitz.Pixmap(str(IMAGES / f"{job['ref']}.png"))
+    kx, ky = sw / ref.width, sh / ref.height
+    regions = [fitz.Rect(b.x0 * kx, b.y0 * ky, b.x1 * kx, b.y1 * ky) for b in red_boxes(job["ref"])]
+
+    doc = fitz.open()
+    page = doc.new_page(width=sw, height=sh)
+    page.insert_image(fitz.Rect(0, 0, sw, sh), filename=str(src))
+    for r in regions:
+        page.draw_rect(r, color=BLUE, width=5)
+
+    out = IMAGES / f"{job['out']}.png"
+    page.get_pixmap(dpi=72).save(str(out))
+    print(f"  wrote images/{out.name}  ({sw}x{sh}, {len(regions)} region(s) ringed)")
+
+
+
+def combine(job):
+    """Two images side by side on one canvas, vertically centred against each other."""
+    pics = [fitz.Pixmap(str(IMAGES / f"{n}.png")) for n in job["srcs"]]
+    cw = sum(p.width for p in pics) + job["gap"] * (len(pics) - 1)
+    ch = max(p.height for p in pics)
+
+    doc = fitz.open()
+    page = doc.new_page(width=cw, height=ch)
+    x = 0
+    for p, n in zip(pics, job["srcs"]):
+        y = (ch - p.height) / 2
+        page.insert_image(fitz.Rect(x, y, x + p.width, y + p.height),
+                          filename=str(IMAGES / f"{n}.png"))
+        x += p.width + job["gap"]
+
+    out = IMAGES / f"{job['out']}.png"
+    page.get_pixmap(dpi=72).save(str(out))
+    fit = min(1100 / cw, 500 / ch)
+    print(f"  wrote images/{out.name}  ({cw}x{ch}, aspect {cw / ch:.2f}) "
+          f"-- log {14.25 * fit:.1f}px/char on the slide")
+
+
 if __name__ == "__main__":
     for j in JOBS:
         compose(j)
+    for j in MARKED:
+        mark_regions(j)
+    for j in COMBINE:
+        combine(j)

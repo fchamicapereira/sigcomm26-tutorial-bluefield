@@ -44,6 +44,15 @@ TODO_MARK = "REPLACE-ME"
 MACHINES = HERE.parent / "admin" / "machines.txt"
 TAILNET = "tail4f7fd9.ts.net"
 
+# Cards that are not reached at <name>.<TAILNET>/. These two sit behind one shared front end and are
+# told apart by a path, so the address differs at its END rather than its start -- hence (shared,
+# distinct) rather than a bare URL: the table greys the shared half and highlights the other,
+# whichever end it falls on.
+URL_OVERRIDES = {
+    "bf3-umich-1": (f"bf3-cards.{TAILNET}/", "umich-1/"),
+    "bf3-umich-2": (f"bf3-cards.{TAILNET}/", "umich-2/"),
+}
+
 # Shown on the slide, so everyone in the room can type it. Rotate it after the tutorial.
 PASSWORD = "Smartnics-Roce-@-Sigcomm"
 
@@ -176,9 +185,11 @@ def group_table():
     of an 1100px slide, and splitting it fills the frame and buys the vertical room the panel and
     the password need.
 
-    Every address ends in the same .tail4f7fd9.ts.net/, so the host is set in the link colour and
-    the shared tail is greyed: the eye lands on the part that differs, which is the only part
-    anyone is looking for, and the address is still complete enough to type.
+    Most of the address is the same on every row, so only the part that differs is set in the link
+    colour and the rest is greyed: the eye lands on the bit anyone is actually looking for, and the
+    address stays complete enough to type. Which end that is depends on the row -- a card with its
+    own Tailscale name differs at the front, one behind a shared front end differs at the back --
+    so URL_OVERRIDES carries the split rather than the emphasis being hard-coded to the host.
     """
     if not MACHINES.exists():
         die(f"{MACHINES} not found -- the group table is built from the fleet list")
@@ -195,10 +206,16 @@ def group_table():
             if i >= len(names):
                 cells.append(f'<td class="n{gap}"></td><td></td>')
                 continue
-            cells.append(
-                f'<td class="n{gap}">{i + 1}</td>'
-                f'<td class="u"><a href="https://{names[i]}.{TAILNET}/">'
-                f'<b>{names[i]}</b><span class="sfx">.{TAILNET}/</span></a></td>')
+            name = names[i]
+            if name in URL_OVERRIDES:
+                shared, distinct = URL_OVERRIDES[name]
+                shown = f'<span class="sfx">{shared}</span><b>{distinct}</b>'
+                href = f"https://{shared}{distinct}"
+            else:
+                shown = f'<b>{name}</b><span class="sfx">.{TAILNET}/</span>'
+                href = f"https://{name}.{TAILNET}/"
+            cells.append(f'<td class="n{gap}">{i + 1}</td>'
+                         f'<td class="u"><a href="{href}">{shown}</a></td>')
         rows.append(f"<tr>{''.join(cells)}</tr>")
 
     # The header's group cells carry .n too, so the heading and the numbers under it can never
@@ -252,7 +269,7 @@ def overview():
             + "</div>")
 
 
-def part(eyebrow, title, shot_name, guide, cls, zoom_shot=None, blurb=None):
+def part(eyebrow, title, shot_name, guide, cls, more_shots=(), blurb=None):
     """The slides every hands-on part gets: where its guide is, then what success looks like.
 
     One helper rather than three near-copies. The parts differ only in their name and their guide,
@@ -266,9 +283,10 @@ def part(eyebrow, title, shot_name, guide, cls, zoom_shot=None, blurb=None):
     --accent for the slide, which the eyebrow, the filename and the outcome caption all read, so a
     part is the same colour everywhere it appears and one edit moves all of it.
 
-    zoom_shot= adds a third slide. A 3024px capture shown whole answers "is this my screen?" and a
-    magnified crop answers "are my numbers moving?"; they are different questions and one image
-    cannot be sized for both, so a part that needs the second gets its own slide for it.
+    more_shots= are further outcome slides, one per image, carrying the same caption. A 3024px
+    capture shown whole answers "is this my screen?" and a magnified crop answers "are my numbers
+    moving?"; they are different questions and no single image can be sized for both, so each gets
+    its own slide.
 
     blurb= is what the part does, one string or a list of lines, for a part whose name does not
     carry it. "Mark ECN" and "Congestion Control" say what they are; "Steering" does not, and it is
@@ -299,11 +317,11 @@ def part(eyebrow, title, shot_name, guide, cls, zoom_shot=None, blurb=None):
     </div>
     """,
     ]
-    if zoom_shot:
+    for extra in more_shots:
         slides.append(f"""
     <div class="centred {cls}">
       <div class="shot-cap">{eyebrow} &middot; {title} &mdash; what you should see</div>
-      {shot(zoom_shot)}
+      {shot(extra)}
     </div>
     """)
     return slides
@@ -337,14 +355,15 @@ DECK = [
     </div>
     """,
     *part("Part 1", "Mark ECN", "part1-doca-flow-outcome", guide="doca-flow.pdf", cls="p1",
-          zoom_shot="part1-doca-flow-zoom"),
+          more_shots=["part1-doca-flow-zoom"]),
     *part("Part 2", "Congestion Control", "part2-doca-pcc-outcome", guide="doca-pcc.pdf",
-          cls="p2", zoom_shot="part2-doca-pcc-zoom"),
-    *part("Bonus", "Steering", "part3-pcc-path-steering-outcome",
+          cls="p2", more_shots=["part2-doca-pcc-zoom"]),
+    *part("Bonus", "Steering", "part3-steering-logs",
           guide="pcc-path-steering.pdf", cls="pb",
-          blurb=["Two paths over one cable &mdash; a CNP tells you which flow is congested, not which path.",
-                 "So one probe flow per path lets PCC measure the two separately.",
-                 "DOCA Flow turns those signals into a 64-bucket split, updated live."]),
+          more_shots=["part3-steering-logs-marked"],
+          blurb=["PCC detects and controls congestion per path.",
+                 "By combining its congestion feedback with DOCA Flow,",
+                 "we can perform congestion-aware traffic steering across multiple paths."]),
 ]
 
 CSS = """
