@@ -252,7 +252,7 @@ def overview():
             + "</div>")
 
 
-def part(eyebrow, title, shot_name, guide, cls, zoom_shot=None):
+def part(eyebrow, title, shot_name, guide, cls, zoom_shot=None, blurb=None):
     """The slides every hands-on part gets: where its guide is, then what success looks like.
 
     One helper rather than three near-copies. The parts differ only in their name and their guide,
@@ -269,12 +269,21 @@ def part(eyebrow, title, shot_name, guide, cls, zoom_shot=None):
     zoom_shot= adds a third slide. A 3024px capture shown whole answers "is this my screen?" and a
     magnified crop answers "are my numbers moving?"; they are different questions and one image
     cannot be sized for both, so a part that needs the second gets its own slide for it.
+
+    blurb= is what the part does, one string or a list of lines, for a part whose name does not
+    carry it. "Mark ECN" and "Congestion Control" say what they are; "Steering" does not, and it is
+    also the part people meet with the least context, being the one after the break.
     """
+    # a list of lines stays lines: broken where the sentences break, not where the box runs out
+    lines = [blurb] if isinstance(blurb, str) else (blurb or [])
+    blurb_html = f'<p class="blurb">{"<br>".join(lines)}</p>' if lines else ""
+
     slides = [
         f"""
     <div class="centred {cls}">
       <div class="eyebrow">{eyebrow}</div>
       <h2>{title}</h2>
+      {blurb_html}
       <p class="lead">The guide on the node</p>
       <p class="gfile">{guide}</p>
     </div>
@@ -331,7 +340,11 @@ DECK = [
           zoom_shot="part1-doca-flow-zoom"),
     *part("Part 2", "Congestion Control", "part2-doca-pcc-outcome", guide="doca-pcc.pdf",
           cls="p2", zoom_shot="part2-doca-pcc-zoom"),
-    *part("Bonus", "Steering", "bonus-steering-outcome", guide=TODO_MARK, cls="pb"),
+    *part("Bonus", "Steering", "part3-pcc-path-steering-outcome",
+          guide="pcc-path-steering.pdf", cls="pb",
+          blurb=["Two paths over one cable &mdash; a CNP tells you which flow is congested, not which path.",
+                 "So one probe flow per path lets PCC measure the two separately.",
+                 "DOCA Flow turns those signals into a 64-bucket split, updated live."]),
 ]
 
 CSS = """
@@ -359,6 +372,9 @@ h2{font-family:'BiolinumB',sans-serif;font-weight:700;font-size:62px;color:#111;
 .lead{font-family:'Biolinum',sans-serif;font-size:33px;color:#333;margin-top:40px}
 /* The guide's filename, alone on the line now that the directory is gone -- so it is sized and
    coloured as the thing being pointed at rather than as a footnote under a path. */
+/* One line of what the part is, between the name and where to read about it. */
+.blurb{margin-top:20px;font-family:'Biolinum',sans-serif;font-size:30px;color:#333;
+       line-height:1.45}
 .gfile{margin-top:20px;font-family:'Inconsolata',monospace;font-size:44px;color:var(--accent,#2C6394)}
 
 /* The group table, in a panel so the addresses read as one object to find yourself in rather than
