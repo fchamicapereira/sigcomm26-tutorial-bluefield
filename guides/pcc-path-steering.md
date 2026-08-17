@@ -34,7 +34,7 @@ The logical pipeline and command-line model remain the same; only the SDK-specif
 
 Start with the intuitive design: one sender, one receiver, and a path multiplexer that distributes packets from one RDMA queue pair (QP) over two paths.
 
-![A single-flow multi-path scenario](./images/simple-multi-path-topology.png){ width=45% }
+<img src="./images/simple-multi-path-topology.png" alt="A single-flow multi-path scenario" width="25%">
 
 The multiplexer can choose a path independently for every packet, but ordinary RoCE congestion feedback does not preserve that choice.
 A receiver that sees an ECN-marked packet sends a Congestion Notification Packet (CNP) for the affected QP.
@@ -60,7 +60,7 @@ DOCA Flow, rather than the normal PCC rate limiter, controls the traffic distrib
 To recover path identity, the application uses two parallel RDMA QPs with equal or comparable offered load.
 We call them the blue QP and the green QP.
 
-![A two-flow multi-path scenario](./images/paired-multi-path-topology.png){ width=45% }
+<img src="./images/paired-multi-path-topology.png" alt="A two-flow multi-path scenario" width="25%">
 
 The colors identify QPs, not paths.
 Packets from either QP may be assigned to either virtual path by the sender-side multiplexer.
