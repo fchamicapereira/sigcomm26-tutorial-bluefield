@@ -1,6 +1,7 @@
-# Bonus section: Path Steering with PCC
-
-# Summary
+---
+title: "Bonus — Path Steering"
+subtitle: "Combining DOCA PCC with DOCA Flow"
+---
 
 Earlier parts of the tutorial introduced two complementary BlueField programming models:
 
@@ -28,13 +29,13 @@ The implementation supports DOCA 2.9, 3.1, and 3.4 through a shared compatibilit
 DOCA 2.7 is not currently supported.
 The logical pipeline and command-line model remain the same; only the SDK-specific host, PCC-reporting, and DOCA Flow APIs differ.
 
-# Part A: Scenario
+# Step 1 — Understand the scenario
 
-## A.1 Why a single QP is not enough
+## Step 1.1 — Why a single QP is not enough
 
 Start with the intuitive design: one sender, one receiver, and a path multiplexer that distributes packets from one RDMA queue pair (QP) over two paths.
 
-<img src="./images/simple-multi-path-topology.png" alt="A single-flow multi-path scenario" width="25%">
+![A single-flow multi-path scenario.](./images/simple-multi-path-topology.png){ width=25% }
 
 The multiplexer can choose a path independently for every packet, but ordinary RoCE congestion feedback does not preserve that choice.
 A receiver that sees an ECN-marked packet sends a Congestion Notification Packet (CNP) for the affected QP.
@@ -55,21 +56,21 @@ PCC does not enforce the calculated rate in this example.
 The DPA program returns `DOCA_PCC_DEV_MAX_RATE` to the NIC and reports its calculated value to the host as a steering signal.
 DOCA Flow, rather than the normal PCC rate limiter, controls the traffic distribution.
 
-## A.2 Paired QPs as path probes
+## Step 1.2 — Use paired QPs as path probes
 
 To recover path identity, the application uses two parallel RDMA QPs with equal or comparable offered load.
 We call them the blue QP and the green QP.
 
-<img src="./images/paired-multi-path-topology.png" alt="A two-flow multi-path scenario" width="25%">
+![A two-flow multi-path scenario.](./images/paired-multi-path-topology.png){ width=25% }
 
 The colors identify QPs, not paths.
 Packets from either QP may be assigned to either virtual path by the sender-side multiplexer.
 At the receiver-side path emulator, however, each path marks only its designated probe QP:
 
-| Selected virtual path | QP eligible for ECN marking | Interpretation |
-| --- | --- | --- |
-| Path 0 | Blue QP | Blue-QP congestion represents path 0 |
-| Path 1 | Green QP | Green-QP congestion represents path 1 |
+| Selected virtual path | QP eligible for ECN marking | Interpretation                          |
+| --------------------- | --------------------------- | --------------------------------------- |
+| Path 0                | Blue QP                     | Blue-QP congestion represents path 0   |
+| Path 1                | Green QP                    | Green-QP congestion represents path 1  |
 
 Packets from the other QP still traverse and consume capacity on that path; they are simply not used as that path's congestion probe.
 Because only roughly half of a paired workload is eligible for marking on a given path, the receiver-side sampler uses twice the requested all-traffic marking probability, capped at 100%.
@@ -83,7 +84,7 @@ The two QPs use different receiver destination IP addresses.
 The destination IP identifies blue versus green traffic and lets the receiver deliver each flow to its receiver SF.
 It does **not** encode the packet's selected path; that is a separate per-packet marker.
 
-## A.3 Mapping the scenario onto one BlueField-3
+## Step 1.3 — Map the scenario onto one BlueField-3
 
 The tutorial emulates two paths using the two PF domains and one physical loopback cable on a single BlueField-3:
 
@@ -103,7 +104,7 @@ Existing ECN bits and unrelated DSCP bits are preserved.
 The UDP destination port is deliberately not used as a path marker.
 UDP port 4791 is covered by the RoCEv2 invariant CRC; rewriting it causes the receiver to drop the packet even if a later rule restores the original value.
 
-## A.4 Forward packet walk
+## Step 1.4 — Follow a packet through the forward path
 
 For each outgoing RoCEv2 packet, the data plane performs the following steps:
 
@@ -119,7 +120,7 @@ For each outgoing RoCEv2 packet, the data plane performs the following steps:
 
 Non-RoCE traffic bypasses the random classifier.
 
-## A.5 Feedback and steering loop
+## Step 1.5 — Close the feedback and steering loop
 
 Path selection is per packet, while congestion control and QP identification remain per transport flow.
 The feedback and steering loop operates as follows:
@@ -136,7 +137,7 @@ At startup, 32 buckets are assigned to each path.
 The controller retains at least three buckets for a constrained path in the one-sided full-rate case, so both paths continue receiving probe traffic.
 The 64-bucket representation gives a steering granularity of 1/64, or approximately 1.56%.
 
-## A.6 What the experiment demonstrates
+## Step 1.6 — What the experiment demonstrates
 
 This experiment demonstrates how PCC and DOCA Flow can form a closed-loop traffic-steering system.
 PCC measures congestion for the probe QPs, and the host converts those measurements into a desired path share.
@@ -144,12 +145,12 @@ DOCA Flow applies that share by updating the bucket dispatch entries while traff
 Together, PCC provides the feedback signal and DOCA Flow enforces the resulting per-packet steering decision at line rate.
 The single-card loopback emulates the two paths for the tutorial, but the same control and steering design can target two real next hops.
 
-# Part B: Run and observe the completed solution
+# Step 2 — Run and observe the completed solution
 
 Before writing any DOCA Flow code, run the completed implementation and observe the behavior that your implementation must reproduce.
 This gives you a known-good reference for the pipeline startup messages, initial path split, and hardware counters.
 
-## B.1 Build the solution
+## Step 2.1 — Build the solution
 
 From the repository root, configure the build and compile the PCC and steering applications:
 
@@ -160,7 +161,7 @@ ninja -C build
 
 The same source builds on DOCA 2.9, 3.1, and 3.4 through the compatibility layer.
 
-## B.2 Start the receiver-side path emulator
+## Step 2.2 — Start the receiver-side path emulator
 
 In the first terminal, start the ingress role on PF0 with the two receiver SF representors:
 
@@ -177,7 +178,7 @@ sudo ./build/doca_flow_steer \
 
 This process reads the private path bit, applies the configured path-specific ECN policy, clears the private bit, and delivers each QP to its receiver SF.
 
-## B.3 Start PCC with the completed egress solution
+## Step 2.3 — Start PCC with the completed egress solution
 
 In a second terminal, start PCC on the sender and pass the PF1 sender SF representor to enable its embedded egress steering pipeline:
 
@@ -204,7 +205,7 @@ Legacy random HASH ready: 6 bits, 64 immutable metadata buckets
 
 The dispatch-ready message appears before the classifier-ready message on all supported versions.
 
-## B.4 Generate traffic and observe the result
+## Step 2.4 — Generate traffic and observe the result
 
 Start an `ib_write_bw` receiver for the first flow in namespace `ns0`:
 
@@ -274,15 +275,17 @@ The later egress counter messages should show the newly applied bucket ratio:
 egress assigned counters: path0=<count> path1=<count> ratio=<path0>:<path1> buckets
 ```
 
-Keep this output available as a reference when you implement the classifier and dispatch logic in the following parts.
+Keep this output available as a reference when you implement the classifier and dispatch logic in
+the following steps.
 Stop the four `ib_write_bw` processes, PCC, and the ingress steering process before moving to the DIY implementation.
 
-# Part C: Randomly classifying packets
+# Step 3 — Randomly classify packets
 
-Before changing the path split, we first need to assign packets to a stable set of buckets that the controller can assign to either path.
-This part walks through the provided random classifier in [`steering/steer.c`](../steering/steer.c) and then asks you to build the same kind of pipe yourself.
+Before changing the path split, we first need to assign packets to a stable set of buckets that the
+controller can assign to either path. This step walks through the provided random classifier in
+[`steering/steer.c`](../steering/steer.c) and then asks you to build the same kind of pipe yourself.
 
-## C.1 The random-bucket classifier
+## Step 3.1 — Understand the random-bucket classifier
 
 The classifier maps every admitted RoCEv2 packet to one of 64 buckets.
 The selected bucket number is written to `meta.u32[4]`, and the packet is forwarded to `EGRESS_BUCKET_DISPATCH`.
@@ -305,7 +308,7 @@ The HASH pipe supplies a persistent set of buckets, while the following dispatch
 The per-packet application metadata word `meta.u32[4]` is used intentionally to carry the selected bucket index to the dispatch pipe.
 DOCA Flow HASH pipes use part of `u32[3]` internally, so the application stores its bucket number outside that region.
 
-## C.2 DOCA 3.x implementation
+## Step 3.2 — Understand the DOCA 3.x implementation
 
 DOCA 3.x provides a native HASH-pipe RANDOM map algorithm.
 `create_classify_pipe()` selects it with `DOCA_FLOW_PIPE_HASH_MAP_ALGORITHM_RANDOM`, so the pipe assigns each packet to one of its HASH entries without requiring a packet field as the hash key.
@@ -324,7 +327,7 @@ After creating the pipe, `add_classify_entries()` installs the 64 immutable entr
 Entry `idx` writes `RTE_BE32(idx)` to `meta.u32[4]`.
 The first 63 entries use `STEER_WAIT_FOR_BATCH`, and the final entry submits the batch for processing.
 
-## C.3 DOCA 2.9 implementation
+## Step 3.3 — Understand the DOCA 2.9 implementation
 
 DOCA 2.x does not provide the native RANDOM map algorithm used on DOCA 3.x.
 Instead, the packet parser supplies a per-packet random value in `parser_meta.random`, and `create_legacy_small_random_table()` configures a HASH pipe to hash that value.
@@ -335,24 +338,25 @@ The rest of the steering pipeline therefore sees the same metadata contract on e
 The compatibility choice is selected at compile time through `STEER_USE_RANDOM_HASH_CLASSIFIER` and `DOCA_USES_LEGACY_FLOW_BACKEND` in [`steering/doca_flow_compat.h`](../steering/doca_flow_compat.h).
 The tutorial code should use the compatibility wrappers such as `steer_pipe_hash_add_entry()` instead of duplicating SDK-specific entry API calls.
 
-## C.4 Expected behavior
+## Step 3.4 — Build the classifier
 
-In Part B, the completed solution created the random HASH pipe and reported traffic on both paths with an initial `32:32` bucket split.
+In Step 2, the completed solution created the random HASH pipe and reported traffic on both paths with an initial `32:32` bucket split.
 Your implementation should reproduce the same startup messages and counter behavior.
 For now, however, it will maintain a fixed `32:32` bucket-to-path split; you will add dynamic steering in the next section.
 
 <details>
-<summary><strong>Try it yourself!</strong></summary>
+<summary><b>Try it yourself! Build the random-bucket classifier.</b></summary>
 
 The repository contains the completed implementation so that you can run the working example first.
-To replace the relevant solution bodies with numbered TODO stubs, apply the provided patch from `doca-<version>/pcc-path-steering` folder:
+To replace the relevant solution bodies with numbered TODO stubs, apply the provided patch from the
+`doca-<version>/pcc-path-steering` directory:
 
 ```bash
 patch -p1 < solution-to-diy.patch
 ```
 
 Implement a 64-entry random-bucket classifier that provides the same metadata contract as the walkthrough above.
-Part C corresponds to TODO 1 in `create_legacy_small_random_table()`, TODO 2 in `create_classify_pipe()`, and TODO 3 in `add_classify_entries()`.
+Step 3 corresponds to TODO 1 in `create_legacy_small_random_table()`, TODO 2 in `create_classify_pipe()`, and TODO 3 in `add_classify_entries()`.
 The DIY version keeps the completed dispatch pipe and assigns 32 buckets to each path.
 Its `apply_path_share()` function is initially a no-op, so PCC diagnostics may calculate a new target while the applied hardware ratio remains `32:32`.
 
@@ -373,13 +377,13 @@ You are finished when the application builds on your installed DOCA version, pri
 
 </details>
 
-# Part D: Dynamically steering packets
+# Step 4 — Steer packets dynamically
 
 The random classifier decides only which bucket a packet belongs to.
-The DIY starting point already provides the metadata dispatch table with a fixed `32:32` assignment so that you can test Part C independently.
-This part explains that table and asks you to implement the live path-share update.
+The DIY starting point already provides the metadata dispatch table with a fixed `32:32` assignment so that you can test Step 3 independently.
+This step explains that table and asks you to implement the live path-share update.
 
-## D.1 Separating classification from path selection
+## Step 4.1 — Separate classification from path selection
 
 `create_classify_dispatch_pipe()` creates a BASIC pipe named `EGRESS_BUCKET_DISPATCH`.
 The pipe matches the bucket number in `meta.u32[4]` and uses a changeable forward for each entry.
@@ -401,7 +405,7 @@ The extra capacity is required because the hardware steering backend can tempora
 At startup, buckets 0 through 31 forward to `EGRESS_PATH0_REWRITE`, and buckets 32 through 63 forward to `EGRESS_PATH1_REWRITE`.
 The two rewrite pipes set the private DSCP path bit and then forward the packet toward the wire.
 
-## D.2 Updating the path share
+## Step 4.2 — Update the path share
 
 `apply_path_share()` receives the desired number of path-0 buckets as an integer from 0 through 64.
 A bucket belongs to path 0 when its index is less than `path0_share`, and it belongs to path 1 otherwise.
@@ -420,9 +424,9 @@ For every bucket that crosses the boundary, the function:
 The HASH entries are not modified, removed, or re-created during this operation.
 Only the changeable forwards in the BASIC dispatch pipe are updated.
 
-## D.3 See dynamic steering in action
+## Step 4.3 — See dynamic steering in action
 
-Run the ingress path emulator as described in Part E, start the PCC application with embedded egress steering, and then generate traffic on both QPs.
+Run the ingress path emulator as described in Step 2.2, start the PCC application with embedded egress steering, and then generate traffic on both QPs.
 When the two path signals request a different split, the controller prints the old and new assignment:
 
 ```text
@@ -439,9 +443,10 @@ The packet-counter ratio will approach the configured bucket ratio over time rat
 The update log proves that the dispatch policy changed, while the counters prove that later packets followed the new policy.
 
 <details>
-<summary><strong>Try it yourself!</strong></summary>
+<summary><b>Try it yourself! Implement live path-share updates.</b></summary>
 
-If you have not already done so in Part C, apply `guide/solution-to-diy.patch` from the repository root to expose the numbered TODO stubs.
+If you have not already done so in Step 3, apply `solution-to-diy.patch` from the
+`doca-<version>/pcc-path-steering` directory to expose the numbered TODO stubs.
 
 The provided `create_classify_dispatch_pipe()` already installs the 64-entry dispatch table, saves the entry handles, and records the initial path assignment.
 Implement TODO 4 in `apply_path_share()` so that it:
