@@ -23,6 +23,7 @@ Standard library only, on purpose: clone the repo and run it, no venv, no pip.
     ./admin/fleet.py pcc-ready                # are the PCC firmware knobs live, staged, or unset
     ./admin/fleet.py links                    # port PCIe names, link state, speed, loopback mode
     ./admin/fleet.py test-tutorial HOST       # run both exercises end to end and report pass/fail
+    ./admin/fleet.py test-path-steering HOST  # run the dual-receiver steering experiment
     ./admin/fleet.py -h
 """
 
@@ -49,7 +50,6 @@ SCRIPTS_DIR = ADMIN_DIR / "local_scripts"
 # Cloned over HTTPS rather than SSH: the repo is public, and putting deploy keys on a dozen
 # shared lab boxes with a published password would be a bad trade.
 REPO_URL = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield.git"
-BRANCH = "main"
 TUTORIAL_USER = "s26t"
 
 # What the participants actually work in: the cut-down tree that
@@ -379,14 +379,25 @@ def confirm_destructive(headline: str, detail: list[str], machines: list[Machine
         return False
     return " ".join(answer.lower().split()) == " ".join(phrase.lower().split())
 
+def current_checkout_branch() -> str:
+    result = subprocess.run(
+        ["git", "-C", str(ADMIN_DIR.parent), "symbolic-ref", "--quiet", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        sys.exit("the controller checkout has a detached HEAD; pass sync --branch explicitly")
+    return result.stdout.strip()
+
 
 def cmd_sync(args: argparse.Namespace) -> int:
     machines = load_inventory(INVENTORY, args.machines)
-    script_args = ["--repo", REPO_URL, "--branch", BRANCH, "--user", TUTORIAL_USER]
+    branch = args.branch or current_checkout_branch()
+    script_args = ["--repo", REPO_URL, "--branch", branch, "--user", TUTORIAL_USER]
     if args.force:
         script_args.append("--force")
 
-    print(f"sync: {BRANCH} -> {len(machines)} machine(s)" f"{' (--force: local changes will be discarded)' if args.force else ''}")
+    print(f"sync: {branch} -> {len(machines)} machine(s)" f"{' (--force: local changes will be discarded)' if args.force else ''}")
 
     results = run_fleet(
         machines,
@@ -732,6 +743,74 @@ def cmd_test_tutorial(args: argparse.Namespace) -> int:
     return summarize(results)
 
 
+def cmd_test_path_steering(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+
+    if not args.machines and not args.whole_fleet:
+        sys.exit(
+            "test-path-steering is destructive: it wipes every OVS bridge and SF on the target.\n"
+            "Name the machines to test, or pass --whole-fleet to run it everywhere."
+        )
+
+    script_args = ["--emit"]
+    if args.skip_build:
+        script_args.append("--skip-build")
+    if args.skip_setup:
+        script_args.append("--skip-setup")
+    if args.force:
+        script_args.append("--force")
+
+    mode = "reusing existing topology" if args.skip_setup else "destructive topology setup"
+    print(
+        f"test-path-steering: {len(machines)} machine(s) — {mode}; "
+        f"at most {TEST_TIMEOUT // 60} min before a machine is given up on"
+    )
+    results = run_fleet(
+        machines,
+        SCRIPTS_DIR / "test_path_steering.sh",
+        script_args,
+        args.jobs,
+        args.timeout or TEST_TIMEOUT,
+        args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(
+        results,
+        [
+            ("HOST", "@host"),
+            ("STATUS", "@status"),
+            ("DOCA", "doca"),
+            ("FLOW0 GBPS", "path0_bw"),
+            ("FLOW1 GBPS", "path1_bw"),
+            ("FLOW0/FLOW1", "flow_ratio"),
+            ("STEER P0/P1", "path_ratio"),
+            ("CE/Gb P1/P0", "ce_ratio"),
+            ("QPN MAP", "qpn_map"),
+            ("PATH0/64", "applied_path0"),
+            ("VERDICT", "verdict"),
+            ("NOTE", "@note"),
+        ],
+    )
+
+    unsupported = [
+        (r.machine.name, r.data.get("doca", "?"))
+        for r in results
+        if r.data.get("verdict") == "unsupported"
+    ]
+    if unsupported:
+        print("\npath steering is not ported for:")
+        for host, doca in unsupported:
+            print(f"  {host} (DOCA {doca})")
+
+    busy = [r.machine.name for r in results if r.data.get("verdict") == "busy"]
+    if busy:
+        print(f"\nin use, not touched: {', '.join(busy)}")
+
+    return summarize(results)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="admin/fleet.py",
@@ -769,7 +848,11 @@ def main() -> int:
             "that is usually somebody's exercise work; --force discards it."
         ),
     )
-    sync.add_argument("--force", action="store_true", help="reset --hard to origin/%s, discarding local changes" % BRANCH)
+    sync.add_argument(
+        "--branch",
+        help="branch to check out on targets (default: this controller checkout's current branch)",
+    )
+    sync.add_argument("--force", action="store_true", help="reset --hard to the selected origin branch, discarding local changes")
     sync.set_defaults(func=cmd_sync)
 
     sync_participants = subparsers.add_parser(
@@ -907,6 +990,37 @@ def main() -> int:
         help="run on every machine in the inventory; required, because this verb is destructive and will not go fleet-wide just because no machines were named",
     )
     test_tutorial.set_defaults(func=cmd_test_tutorial)
+
+    test_path_steering = subparsers.add_parser(
+        "test-path-steering",
+        parents=[common],
+        help="run the dual-receiver PCC path-steering experiment end to end",
+        description=(
+            "Run admin/local_scripts/test_path_steering.sh on each target: create PF0 sf0 and "
+            "sf4 receivers plus a PF1 sf0 sender, build the pcc-path-steering submodule, start "
+            "ingress and embedded-egress steering, run simultaneous RDMA-CM traffic to "
+            "10.0.0.1 and 10.0.0.11, then verify QPN mapping, sustained bandwidth, the 2:1 ECN "
+            "signal and a dynamically applied path share. DESTRUCTIVE: every OVS bridge and SF "
+            "on the target is replaced, so a machine name or --whole-fleet is mandatory."
+        ),
+    )
+    test_path_steering.add_argument(
+        "--skip-build", action="store_true", help="reuse pcc-path-steering/build"
+    )
+    test_path_steering.add_argument(
+        "--skip-setup",
+        action="store_true",
+        help="reuse and validate the existing SF/namespace topology",
+    )
+    test_path_steering.add_argument(
+        "--force", action="store_true", help="ignore an already-running DOCA/DPDK workload"
+    )
+    test_path_steering.add_argument(
+        "--whole-fleet",
+        action="store_true",
+        help="run on every inventory machine; required when no machine is named",
+    )
+    test_path_steering.set_defaults(func=cmd_test_path_steering)
 
     args = parser.parse_args()
     return args.func(args)

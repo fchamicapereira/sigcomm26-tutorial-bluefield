@@ -1,5 +1,14 @@
 This repository contains the source code and materials for the tutorial "Programming SmartNICs: From Packet Processing to Programmable Transport" to happen at SIGCOMM 2026.
 
+The PCC path-steering example is included as a Git submodule. Clone with
+submodules enabled, or initialize it after cloning:
+
+```bash
+git clone --recurse-submodules <repository-url>
+# Existing checkout:
+git submodule update --init --recursive
+```
+
 Here is the brief overview of the tutorial, as shown in the SIGCOMM 2026 [website](https://conferences.sigcomm.org/sigcomm/2026/tutorials/smartnic/):
 
 # Overview
@@ -834,4 +843,3 @@ sudo pkill -INT -x doca_pcc     # stop gracefully (never SIGKILL: leaves a ghost
 > counts): the receiver's HW **CNP generation** may be priority-scoped. Add a traffic class to steer
 > traffic onto an ECN-enabled priority — e.g. `--tclass=104` (DSCP 26 → TC3) on both `ib_write_bw`
 > ends — even though `doca_flow_ecn` already marks CE regardless of queue.
-
