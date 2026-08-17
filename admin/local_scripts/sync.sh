@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Target-side: clone or update the tutorial repo in the tutorial user's home.
+# Target-side: clone or update the tutorial repo under /opt.
 #
 # fleet.py pipes this over stdin (`ssh <host> bash -s -- <args>`), so it MUST stay
 # self-contained: it cannot source anything else from the repo, because on a fresh machine this
@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-DEST="${DEST:-/home/$TUSER/$(basename "${REPO_URL%.git}")}"
+DEST="${DEST:-/opt/$(basename "${REPO_URL%.git}")}"
 
 die()  { echo "ERROR: $*" >&2; exit 1; }
 emit() { printf '@@%s=%s\n' "$1" "$2"; }
@@ -52,9 +52,23 @@ else
 	as_tuser() { sudo -n -u "$TUSER" -H "$@"; }
 fi
 
+# /opt is normally root-owned. Create an empty destination as root and hand it to the tutorial
+# user before git writes anything. Remember that it was absent so the clone path still runs.
+DEST_WAS_MISSING=0
+if [ ! -e "$DEST" ]; then
+	DEST_WAS_MISSING=1
+	parent=$(dirname "$DEST")
+	[ -d "$parent" ] || die "$parent does not exist"
+	if [ ! -w "$parent" ]; then
+		sudo -n true 2>/dev/null || die "passwordless sudo is needed to create $DEST"
+		sudo -n mkdir "$DEST"
+		sudo -n chown "$TUSER:$TUSER" "$DEST"
+	fi
+fi
+
 git_t() { as_tuser git -C "$DEST" "$@"; }
 
-if [ ! -e "$DEST" ]; then
+if [ "$DEST_WAS_MISSING" -eq 1 ]; then
 	echo "cloning $REPO_URL ($BRANCH) -> $DEST"
 	as_tuser git clone --branch "$BRANCH" "$REPO_URL" "$DEST"
 	action="cloned"

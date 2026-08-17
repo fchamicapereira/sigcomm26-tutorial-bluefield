@@ -13,6 +13,7 @@ ran ssh-copy-id against still works.
 Standard library only, on purpose: clone the repo and run it, no venv, no pip.
 
     ./admin/fleet.py sync                     # every machine in the inventory
+    ./admin/fleet.py migrate-repo             # move existing checkouts from /home/s26t to /opt
     ./admin/fleet.py sync bf3-ulisbon-1       # just these
     ./admin/fleet.py sync --force             # discard local modifications on the targets
     ./admin/fleet.py sync-participants        # install the participant repo, minus its .git
@@ -51,6 +52,9 @@ SCRIPTS_DIR = ADMIN_DIR / "local_scripts"
 # shared lab boxes with a published password would be a bad trade.
 REPO_URL = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield.git"
 TUTORIAL_USER = "s26t"
+REPO_NAME = REPO_URL.rsplit("/", 1)[-1].removesuffix(".git")
+REPO_DEST = f"/opt/{REPO_NAME}"
+LEGACY_REPO_DEST = f"/home/{TUTORIAL_USER}/{REPO_NAME}"
 
 # What the participants actually work in: the cut-down tree that
 # admin/update_participants_repo_on_github.py generates and pushes. Separate repo, separate verb
@@ -398,7 +402,7 @@ def current_checkout_branch() -> str:
 def cmd_sync(args: argparse.Namespace) -> int:
     machines = load_inventory(INVENTORY, args.machines)
     branch = args.branch or current_checkout_branch()
-    script_args = ["--repo", REPO_URL, "--branch", branch, "--user", TUTORIAL_USER]
+    script_args = ["--repo", REPO_URL, "--branch", branch, "--user", TUTORIAL_USER, "--dest", REPO_DEST]
     if args.force:
         script_args.append("--force")
 
@@ -425,6 +429,28 @@ def cmd_sync(args: argparse.Namespace) -> int:
             ("BRANCH", "branch"),
             ("NOTE", "@note"),
         ],
+    )
+    return summarize(results)
+
+
+def cmd_migrate_repo(args: argparse.Namespace) -> int:
+    machines = load_inventory(INVENTORY, args.machines)
+    print(f"migrate-repo: {LEGACY_REPO_DEST} -> {REPO_DEST} on {len(machines)} machine(s)")
+
+    results = run_fleet(
+        machines,
+        SCRIPTS_DIR / "migrate_repo.sh",
+        ["--user", TUTORIAL_USER, "--source", LEGACY_REPO_DEST, "--dest", REPO_DEST],
+        args.jobs,
+        args.timeout or DEFAULT_TIMEOUT,
+        args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+
+    render_table(
+        results,
+        [("HOST", "@host"), ("STATUS", "@status"), ("ACTION", "action"), ("DEST", "dest"), ("NOTE", "@note")],
     )
     return summarize(results)
 
@@ -684,7 +710,7 @@ def cmd_test_tutorial(args: argparse.Namespace) -> int:
             f"run it on all {len(machines)} machines in {INVENTORY.name}."
         )
 
-    script_args = ["--emit"]
+    script_args = ["--emit", "--repo", REPO_DEST]
     if args.skip_build:
         script_args.append("--skip-build")
     if args.skip_pcc:
@@ -759,7 +785,7 @@ def cmd_test_path_steering(args: argparse.Namespace) -> int:
             "Name the machines to test, or pass --whole-fleet to run it everywhere."
         )
 
-    script_args = ["--emit"]
+    script_args = ["--emit", "--repo", REPO_DEST]
     if args.skip_build:
         script_args.append("--skip-build")
     if args.skip_setup:
@@ -850,7 +876,7 @@ def main() -> int:
         parents=[common],
         help="clone or update the tutorial repo on each machine",
         description=(
-            f"Clone {REPO_URL} into ~{TUTORIAL_USER}, or fast-forward it if already present. "
+            f"Clone {REPO_URL} into {REPO_DEST}, or fast-forward it if already present. "
             "Refuses to touch a tree with local modifications or on the wrong branch, since "
             "that is usually somebody's exercise work; --force discards it."
         ),
@@ -861,6 +887,18 @@ def main() -> int:
     )
     sync.add_argument("--force", action="store_true", help="reset --hard to the selected origin branch, discarding local changes")
     sync.set_defaults(func=cmd_sync)
+
+    migrate_repo = subparsers.add_parser(
+        "migrate-repo",
+        parents=[common],
+        help="move an existing tutorial checkout from the tutorial user's home into /opt",
+        description=(
+            f"Move {LEGACY_REPO_DEST} to {REPO_DEST} on each selected machine. The command "
+            "refuses to overwrite an existing destination. If the source is already gone and "
+            "the destination exists, it reports the machine as already migrated."
+        ),
+    )
+    migrate_repo.set_defaults(func=cmd_migrate_repo)
 
     sync_participants = subparsers.add_parser(
         "sync-participants",

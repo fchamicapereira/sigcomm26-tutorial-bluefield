@@ -28,7 +28,7 @@
 set -euo pipefail
 
 # --- defaults -----------------------------------------------------------------------------------
-REPO="${TUTORIAL_REPO:-/home/s26t/sigcomm26-tutorial-bluefield}"
+REPO="${TUTORIAL_REPO:-/opt/sigcomm26-tutorial-bluefield}"
 LOGDIR="${TUTORIAL_TEST_LOGDIR:-}"   # empty => a fresh mktemp -d under /tmp, see below
 PCAP=""                              # empty => capture.pcap inside $LOGDIR
 SAMPLE=10000        # --sample: write ~1-in-N of the captured packets
@@ -59,7 +59,7 @@ DESTRUCTIVE: deletes every OVS bridge and SF on both PFs (via setup_roce_loopbac
 the ports at line rate. Everything before that is read-only.
 
 Options:
-  --repo DIR        tutorial checkout (default: /home/s26t/sigcomm26-tutorial-bluefield)
+  --repo DIR        tutorial checkout (default: /opt/sigcomm26-tutorial-bluefield)
   --pcap PATH       capture file to write and inspect (default: capture.pcap in the run's log dir)
   --sample N        doca_flow_ecn_pcap --sample (default: 10000)
   --percent P       doca_flow_ecn_pcap --percent (default: 100)

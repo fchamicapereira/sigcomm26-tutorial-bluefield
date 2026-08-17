@@ -2,7 +2,7 @@
 # Destructive end-to-end test for the dual-receiver PCC path-steering example.
 set -euo pipefail
 
-REPO="${TUTORIAL_REPO:-/home/s26t/sigcomm26-tutorial-bluefield}"
+REPO="${TUTORIAL_REPO:-/opt/sigcomm26-tutorial-bluefield}"
 LOGDIR="${PATH_STEERING_TEST_LOGDIR:-}"
 WARMUP=15
 WINDOW=10
