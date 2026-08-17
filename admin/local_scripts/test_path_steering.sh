@@ -143,7 +143,7 @@ PROJECT=""
 BUILD_DIR=""
 FLOW_BIN=""
 PCC_BIN=""
-SETUP="$REPO/admin/local_scripts/setup_path_steering.sh"
+SETUP="$REPO/admin/local_scripts/setup_roce_loopback.sh"
 
 CLEANUP_DONE=0
 cleanup() {
