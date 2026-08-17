@@ -90,7 +90,10 @@ ASSETS = {"participants/c_cpp_properties.json": ".vscode/c_cpp_properties.json"}
 # Top-level directories this script owns: deleted and rewritten on every run. Anything else in the
 # participant repo survives.
 MANAGED = list(VERSIONS) + ["scripts", ".vscode", "images"]
-MANAGED_FILES = [".clang-format"]
+# .clangd gives the language server its DOCA/DPDK include paths before the participant's
+# first `meson setup` writes a compile_commands.json. Without it the exercise opens with
+# "'doca_argp.h' file not found", which looks like a broken checkout.
+MANAGED_FILES = [".clang-format", ".clangd"]
 
 # Paths this script USED to write and now deletes on sight. Without this they would sit in every
 # existing checkout forever: MANAGED only rebuilds the directories it still owns, and nothing at all
@@ -279,6 +282,9 @@ def build_version(dest, version, changes, dry_run):
     copy(flow_src / "dependencies" / "meson.build", flow_out / "dependencies" / "meson.build",
          changes, dry_run)
     copy(flow_src / "doca_flow_compat.h", flow_out / "doca_flow_compat.h", changes, dry_run)
+    # Per-tree clangd config: force-includes the compat header above, the same way meson
+    # does. Must be per-directory -- clangd ignores `If:` conditions in project configs.
+    copy(flow_src / ".clangd", flow_out / ".clangd", changes, dry_run)
 
     # The exercise. Called doca_flow_ecn.c over there: "template" is our word for it, and a
     # participant has just the one program.

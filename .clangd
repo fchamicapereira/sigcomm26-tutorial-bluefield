@@ -1,0 +1,44 @@
+# Configuration for clangd, the C language server behind autocomplete and go-to-definition in
+# code-server on the cards (extension llvm-vs-code-extensions.vscode-clangd).
+#
+# WHY THIS EXISTS. clangd takes its include paths from compile_commands.json, which meson only
+# writes once you have run `meson setup`. Before that first build it has nothing at all, and
+# doca_flow_ecn.c opens with 16 errors beginning:
+#
+#     'doca_argp.h' file not found
+#     unknown type name 'bool'
+#
+# which reads like a broken checkout and is not -- the file builds perfectly. These flags give
+# clangd enough to resolve the DOCA and DPDK headers from the moment the repository is cloned.
+#
+# The flags are what meson actually passes, read off a real compile_commands.json
+# (`pkg-config --cflags doca-flow doca-argp libdpdk`), not invented. After you build, the real
+# per-file command from compile_commands.json is used and these are appended to it, so a duplicate
+# -I costs nothing and the two can never disagree about anything that matters.
+#
+# Everything under /opt/mellanox exists only on the BlueField. Opening this repository on a laptop
+# resolves none of it -- the same caveat .vscode/c_cpp_properties.json already carries for VS Code's
+# own extension.
+CompileFlags:
+  Add:
+    # meson sets no c_std, so gcc compiles these as gnu17. Under strict c17 the BSD types that
+    # pcap.h and friends use without declaring (u_int, u_char) all turn into errors.
+    - -std=gnu17
+
+    - -I/opt/mellanox/doca/include
+    - -I/usr/include/libnl3
+    - -I/opt/mellanox/dpdk/include/dpdk
+    - -I/opt/mellanox/dpdk/include/aarch64-linux-gnu/dpdk
+    - -I/opt/mellanox/flexio/include
+
+    # DOCA guards its newer APIs behind the first of these and DPDK does the same with the second.
+    # Without them much of doca_flow.h is invisible and every call into it looks undeclared.
+    - -DDOCA_ALLOW_EXPERIMENTAL_API
+    - -DALLOW_EXPERIMENTAL_API
+    - -DFLEXIO_ALLOW_EXPERIMENTAL_API
+    - -DDOCA_USE_LIBBSD
+    - -DRTE_USE_LIBBSD
+
+    # DPDK headers expect this to have been included already; the build passes it the same way.
+    - -include
+    - rte_config.h

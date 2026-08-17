@@ -1,0 +1,16 @@
+# Merged with the .clangd at the repository root -- clangd reads every .clangd from the file's own
+# directory upwards. This one adds only what is specific to the doca-flow sources.
+#
+# meson force-includes doca_flow_compat.h ahead of every source in this directory (it shims the
+# DOCA 2.9 API renames back onto older releases). Without it clangd reports
+# `struct doca_flow_resource_query` as an incomplete type on a DOCA 2.7 card, in a file that
+# compiles and links perfectly there.
+#
+# It lives HERE rather than in the root config because clangd IGNORES `If:` conditions inside
+# project .clangd files -- they only work in the user-level config. A per-directory file is the
+# only way to scope a flag to one tree, and there are two trees with two different compat headers.
+#
+# Paths are relative and resolved against this directory, so the repository works wherever it is
+# cloned and whoever clones it.
+CompileFlags:
+  Add: [-I., -include, doca_flow_compat.h]
