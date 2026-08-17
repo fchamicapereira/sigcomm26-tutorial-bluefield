@@ -22,6 +22,7 @@ The deck itself is DECK, below: one entry per slide, plain HTML. Add slides ther
 """
 
 import base64
+import io
 import json
 import pathlib
 import shutil
@@ -30,11 +31,21 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 GUIDES = HERE.parent / "guides"
+SHOTS = HERE / "images"
+FONTDIR = HERE / "fonts"
 OUT = HERE / "hands-on.html"
 
-# The link participants type or scan. Replace with the real one; the QR is generated from this
-# exact string, so the two can never disagree.
-HANDSON_URL = "https://github.com/REPLACE-ME"
+# Stand-in for a link that is not decided yet. Slides may ship with it; the build counts them and
+# says so at the end, so an unreplaced link is loud rather than something you meet on the projector.
+TODO_URL = "https://github.com/REPLACE-ME"
+
+# Where people are sent to get onto a card. NOT the participants repo below -- getting onto a
+# BlueField and reading a part's guide are two different destinations.
+HANDSON_URL = TODO_URL
+
+# The repo participants clone: the one admin/update_participants_repo_on_github.py writes. The
+# per-part guide links derive from it, so a rename is one edit here.
+PARTICIPANTS_REPO = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants"
 
 TITLE = "Hands on with SmartNICs"
 
@@ -57,10 +68,21 @@ def data_uri(blob, mime):
 
 
 def find_font(name):
-    r = subprocess.run(["kpsewhich", name], capture_output=True, text=True)
-    p = r.stdout.strip()
+    """The font file: the deck's own fonts/ first, TeX Live's copy second.
+
+    fonts/ holds the same four faces CTAN ships, ~1.3 MB, so the deck builds on a laptop with no
+    TeX Live -- which is most laptops, and apt wants 1.35 GB of texlive-fonts-extra for exactly
+    these files. kpsewhich stays as the fallback so a machine that already has them uses its own.
+    """
+    local = FONTDIR / name
+    if local.exists():
+        return local
+    try:
+        p = subprocess.run(["kpsewhich", name], capture_output=True, text=True).stdout.strip()
+    except FileNotFoundError:
+        p = ""
     if not p:
-        die(f"font not found: {name}. It ships with TeX Live "
+        die(f"font not found: {name}. Put it in {FONTDIR.name}/ (it is on CTAN) or install TeX Live "
             "(libertine in collection-xetex, inconsolata in collection-fontsextra).")
     return pathlib.Path(p)
 
@@ -74,39 +96,94 @@ def font_faces():
     return "\n".join(css)
 
 
-def logo_uri(ident):
-    """A logo as an inlined PNG. The PDFs are vector art for LaTeX; browsers need a raster.
+def rasterise(pdf, out):
+    """Vector logo to transparent PNG at 600 dpi.
 
-    -r600 with pngalpha keeps the marks crisp when the deck is projected and preserves the
-    transparency, so they sit on the slide background rather than in white boxes.
+    600 dpi with an alpha channel keeps the marks crisp when projected and keeps them sitting on
+    the slide background rather than in white boxes. Two backends because neither is everywhere:
+    ghostscript is what a TeX-shaped machine already has, PyMuPDF is a pip install needing no root.
     """
+    if shutil.which("gs"):
+        subprocess.run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=pngalpha", "-r600",
+                        "-dUseCropBox", f"-sOutputFile={out}", str(pdf)], check=True)
+        return
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        die("converting the PDF logos needs either ghostscript (gs) or PyMuPDF (pip install pymupdf)")
+    with fitz.open(pdf) as doc:
+        doc[0].get_pixmap(dpi=600, alpha=True).save(out)
+
+
+def logo_uri(ident):
+    """A logo as an inlined PNG. The PDFs are vector art for LaTeX; browsers need a raster."""
     png = GUIDES / "logos" / f"{ident}.png"
     pdf = GUIDES / "logos" / f"{ident}.pdf"
     if png.exists():
         return data_uri(png.read_bytes(), "image/png")
     if not pdf.exists():
         return None
-    if not shutil.which("gs"):
-        die("ghostscript (gs) is needed to convert the PDF logos for the web")
     out = HERE / f".{ident}.tmp.png"
-    subprocess.run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=pngalpha", "-r600",
-                    "-dUseCropBox", f"-sOutputFile={out}", str(pdf)], check=True)
+    rasterise(pdf, out)
     uri = data_uri(out.read_bytes(), "image/png")
     out.unlink()
     return uri
 
 
 def qr_uri(url):
-    """The QR, or None. Optional on purpose: a missing qrencode should cost you the code, not the
-    deck -- the printed link is still on the slide."""
-    if not shutil.which("qrencode"):
-        print("  note: qrencode not installed, slide 2 will show the link without a QR code")
+    """The QR, or None. Optional on purpose: a missing encoder should cost you the code, not the
+    deck -- the printed link is still on the slide.
+
+    qrencode if it is installed, segno (pure Python, no root) if not. Same parameters either way:
+    12px modules, 1-module quiet zone, error level M.
+    """
+    if shutil.which("qrencode"):
+        out = HERE / ".qr.tmp.png"
+        subprocess.run(["qrencode", "-o", str(out), "-s", "12", "-m", "1", "-l", "M", url],
+                       check=True)
+        uri = data_uri(out.read_bytes(), "image/png")
+        out.unlink()
+        return uri
+    try:
+        import segno
+    except ImportError:
+        print("  note: no qrencode and no segno, the hands-on slide will show the link with no QR")
         return None
-    out = HERE / ".qr.tmp.png"
-    subprocess.run(["qrencode", "-o", str(out), "-s", "12", "-m", "1", "-l", "M", url], check=True)
-    uri = data_uri(out.read_bytes(), "image/png")
-    out.unlink()
-    return uri
+    buf = io.BytesIO()
+    segno.make(url, error="m").save(buf, kind="png", scale=12, border=1)
+    return data_uri(buf.getvalue(), "image/png")
+
+
+def pretty(url):
+    """A URL as it should be READ off a projector, not as it is typed. The scheme is noise at 30px
+    and nobody types it anyway; the href keeps the real thing."""
+    return url.removeprefix("https://").removeprefix("http://")
+
+
+def image_uri(path):
+    """A screenshot or figure, inlined. Same no-network rule as everything else here."""
+    mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(path.suffix.lower())
+    if mime is None:
+        die(f"unsupported image type: {path.name} (png or jpg)")
+    return data_uri(path.read_bytes(), mime)
+
+
+def shot(name):
+    """The expected-outcome screenshot for a part, or a placeholder standing in its place.
+
+    Missing on purpose is a normal state here: the outcome slides are written before the run that
+    produces the screenshot. So a missing file prints a note and draws a labelled box rather than
+    failing the build -- the deck stays presentable, and the gap is obvious on the slide instead of
+    being a silent blank. Drop the file at the path below and rebuild; nothing else changes.
+    """
+    for ext in (".png", ".jpg", ".jpeg"):
+        p = SHOTS / f"{name}{ext}"
+        if p.exists():
+            return f'<img class="shot" src="{image_uri(p)}" alt="">'
+    print(f"  note: no screenshot yet for '{name}' -- drop one at "
+          f"slides/images/{name}.png and rebuild")
+    return (f'<div class="shot-missing"><span>screenshot<br>'
+            f'<code>slides/images/{name}.png</code></span></div>')
 
 
 meta = json.loads((GUIDES / "tutorial.json").read_text())
@@ -120,6 +197,48 @@ def people_row(key):
                         for a in p["affiliations"] if logos.get(a["id"]))
         out.append(f'<span class="person">{p["name"]}{marks}</span>')
     return "".join(out)
+
+
+def part(eyebrow, title, shot_name, guide=None, url=None):
+    """The two slides every hands-on part gets: where its guide is, then what success looks like.
+
+    One helper rather than three near-copies. The parts differ only in their name and their guide,
+    and a deck where Part 2 has drifted a font size away from Part 1 reads as a mistake from the
+    third row.
+
+    guide= names a file at the root of the participants repo, and the slide shows the repo with the
+    filename under it: the full blob URL is ~100 characters, which is not a thing anyone reads off
+    a projector, while the repo alone fits on one line and is what they need to reach anyway.
+    url= is for a part whose guide does not live there (or does not exist yet).
+    """
+    if guide:
+        href, shown = f"{PARTICIPANTS_REPO}/blob/main/{guide}", pretty(PARTICIPANTS_REPO)
+        note = f'<p class="filenote">&rarr; <code>{guide}</code></p>'
+    else:
+        href = shown = url
+        note = ""
+        shown = pretty(shown)
+    return [
+        f"""
+    <div class="centred">
+      <div class="eyebrow">{eyebrow} &mdash; in progress</div>
+      <h2>{title}</h2>
+      <p class="lead">The guide:</p>
+      <p class="url"><a href="{href}">{shown}</a></p>
+      {note}
+    </div>
+    """,
+        # No h2 here on purpose. These screenshots are 3024px-wide terminals, and a 62px heading
+        # costs the image ~110px of height -- which, at their 1.66 aspect, is ~180px of width. The
+        # slide's whole job is "does your screen look like this?", so the caption folds into one
+        # line and the picture gets everything else.
+        f"""
+    <div class="centred">
+      <div class="shot-cap">{eyebrow} &middot; {title} &mdash; what you should see</div>
+      {shot(shot_name)}
+    </div>
+    """,
+    ]
 
 
 QR = qr_uri(HANDSON_URL)
@@ -143,10 +262,13 @@ DECK = [
     <div class="centred">
       <h2>Let&rsquo;s get you onto a BlueField&#8209;3</h2>
       <p class="lead">Follow these steps:</p>
-      <p class="url"><a href="{HANDSON_URL}">{HANDSON_URL}</a></p>
+      <p class="url"><a href="{HANDSON_URL}">{pretty(HANDSON_URL)}</a></p>
       {QR_IMG}
     </div>
     """,
+    *part("Part 1", "DOCA Flow", "part1-doca-flow-outcome", guide="doca-flow.pdf"),
+    *part("Part 2", "DOCA PCC", "part2-doca-pcc-outcome", guide="doca-pcc.pdf"),
+    *part("Bonus", "Steering", "bonus-steering-outcome", url=TODO_URL),
 ]
 
 CSS = """
@@ -173,9 +295,36 @@ hr{border:0;border-top:1.5px solid #C8C8C8;width:58%;margin:34px auto}
 h2{font-family:'BiolinumB',sans-serif;font-weight:700;font-size:62px;color:#111;line-height:1.1}
 .lead{font-family:'Biolinum',sans-serif;font-size:33px;color:#333;margin-top:40px}
 .url{margin-top:22px}
-.url a{font-family:'Inconsolata',monospace;font-size:42px;color:#4A7AAB;text-decoration:none;
+/* 30px, not larger: the repo name is 68 characters, and at 42px it wrapped mid-string. One
+   unbroken line people can read off and type beats a bigger one they have to reassemble. */
+.url a{font-family:'Inconsolata',monospace;font-size:30px;color:#4A7AAB;text-decoration:none;
        border-bottom:2px solid rgba(74,122,171,.3);padding-bottom:3px;word-break:break-all}
 .qr{margin-top:36px;height:210px;image-rendering:pixelated}
+
+/* Part slides. The eyebrow carries which part you are in, so the h2 can be the plain name of the
+   thing -- "DOCA Flow", not "Part 1: DOCA Flow" wrapped onto two lines. */
+.eyebrow{font-family:'Biolinum',sans-serif;font-size:26px;letter-spacing:1.5px;
+         text-transform:uppercase;color:#4A7AAB;margin-bottom:18px}
+/* On an outcome slide the caption is not a kicker over a heading -- it IS the heading, the only
+   text on the slide, so it is sized as one. 40px: the widest of the three captions then sits at
+   81% of the line (46px would be 93%, too tight for a part with a longer name), and it costs the
+   screenshot 31px of width against a 26px caption -- 3.6%, for a caption half again as large.
+   Tracking drops to .5px because 1.5px is a small-text trick that looks loose this big. */
+.shot-cap{font-family:'Biolinum',sans-serif;font-size:40px;letter-spacing:.5px;
+          text-transform:uppercase;color:#4A7AAB;margin-bottom:18px}
+.filenote{margin-top:16px;font-family:'Biolinum',sans-serif;font-size:24px;color:#555}
+.filenote code{font-family:'Inconsolata',monospace;font-size:26px;color:#111}
+
+/* 495px is the tallest that still clears the 40px caption and the 70px padding on a 720px stage --
+   measured, not guessed. The screenshots are wide (1.66), so height is what binds: every pixel
+   here is 1.66 of width. contain keeps the aspect ratio of whatever gets dropped in, and the
+   placeholder below is the same height so the slide does not jump when the real one arrives. */
+.shot{display:block;margin:14px auto 0;max-width:100%;max-height:495px;object-fit:contain;
+      border:1px solid #DDD;border-radius:4px}
+.shot-missing{display:flex;align-items:center;justify-content:center;width:70%;height:495px;
+              margin:34px auto 0;border:2px dashed #CCC;border-radius:6px;
+              font-family:'Biolinum',sans-serif;font-size:26px;color:#999;line-height:1.9}
+.shot-missing code{font-family:'Inconsolata',monospace;font-size:23px;color:#777}
 
 /* Deliberately dim and out of the way: useful while presenting, invisible from the third row. */
 #num{position:fixed;right:14px;bottom:10px;font-family:'Biolinum',sans-serif;font-size:13px;
@@ -234,5 +383,9 @@ html = f"""<!doctype html>
 OUT.write_text(html)
 kb = len(html.encode()) // 1024
 print(f"  wrote {OUT.name}  ({len(DECK)} slides, {kb} KB, self-contained)")
+
+pending = html.count(f'href="{TODO_URL}"')
+if pending:
+    print(f"  TODO: {pending} link(s) still point at {TODO_URL} -- and the QR encodes it as-is")
 if "--open" in sys.argv:
     subprocess.run(["open", str(OUT)])
