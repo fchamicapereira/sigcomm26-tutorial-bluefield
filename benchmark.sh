@@ -49,41 +49,83 @@ if [ -z "$TTYPLOT" ]; then
   done
 fi
 HAVE_TTYPLOT=0
-if [ -n "$TTYPLOT" ] && [ -x "$TTYPLOT" ]; then
+if [ ! -t 1 ]; then
+  # ttyplot is a full-screen ncurses program: with stdout redirected to a file or a pipe it dies on
+  # "Error opening terminal", taking the reader out from under the client and leaving this script
+  # spinning on a pipe nobody is holding. Plain lines are what a redirected run wants anyway.
+  echo "Note: stdout is not a terminal -- showing plain throughput instead of a live chart." >&2
+elif [ -n "$TTYPLOT" ] && [ -x "$TTYPLOT" ]; then
   HAVE_TTYPLOT=1
 else
   echo "Note: ttyplot not found (not on PATH or in the repo) -- showing plain throughput instead of a live chart." >&2
 fi
 
+# A DOCA Flow program OWNS the NIC's eSwitch: while its pipeline is not forwarding, no packet gets
+# across. That is not an edge case during the exercise — it is most of it, since every half-written
+# pipeline drops traffic, as does the moment between commenting out the no-op root pipe and
+# finishing your own.
+#
+# ib_write_bw does not ride that out. Its RC queue pair exhausts its transport retries in about a
+# second and the client aborts for good:
+#     Completion with error at client / Failed status 12: wr_id 0 syndrom 0x81
+#     Error occurred while running infinitely! aborting ...
+# and it does NOT come back when forwarding does. The server process survives but its queue pair is
+# equally dead, so a fresh client cannot attach to it either:
+#     Unexpected CM event / Unable to perform rdma_client function
+# Recovering means restarting BOTH ends, which is why this script supervises them rather than
+# launching them once. A broken pipeline shows up as the chart going flat, and it fills in again by
+# itself once you fix it — nothing to restart by hand.
+RESTART_DELAY_SEC="2"
+RESTART_LOG="/tmp/benchmark-restarts.log"
+
+# The [i] keeps the pattern from matching the `sudo pkill …` process that carries it in its own argv.
+# Match by argv, not $!: sudo runs with use_pty on this box, so a backgrounded `sudo … &` job's PID
+# is sudo's own pty-monitor process, not ib_write_bw itself — killing/waiting on that PID doesn't
+# reliably reach or reap the real command.
+#
+# SIGINT alone is not enough: a server parked in --run_infinitely waiting for a client ignores it and
+# survives, and every survivor keeps its share of the link, so the next run reads half the throughput
+# for no visible reason. Escalate to SIGKILL for anything still standing.
+stop_both() {
+  local pattern sig
+  for sig in INT KILL; do
+    for pattern in "[i]b_write_bw -d $SERVER_DEV" "[i]b_write_bw -d $CLIENT_DEV"; do
+      sudo pkill -"$sig" -f "$pattern" 2>/dev/null
+    done
+    [ "$sig" = INT ] && sleep 1
+  done
+}
+
+# Set on the way out so the supervision loop knows a Ctrl-C is not a broken pipeline. It runs in a
+# subshell (the left-hand side of the pipe below), so it cannot see a variable — hence a file.
+STOP_FILE="$(mktemp -u /tmp/benchmark-stop.XXXXXX)"
+
 CLEANED_UP=""
 cleanup() {
   [ -n "$CLEANED_UP" ] && return
   CLEANED_UP=1
-  echo "Stopping server..."
-  # Match by argv, not $!: sudo runs with use_pty on this box, so a backgrounded
-  # `sudo ... &` job's PID is sudo's own pty-monitor process, not ib_write_bw itself —
-  # killing/waiting on that PID doesn't reliably reach or reap the real command.
-  sudo pkill -INT -f "ib_write_bw -d $SERVER_DEV" 2>/dev/null
+  : > "$STOP_FILE"
+  echo "Stopping server and client..."
+  stop_both
   sleep 1
+  rm -f "$STOP_FILE"
 }
 # EXIT alone is enough: bash runs it on normal completion AND after an uncaught INT/TERM.
 trap cleanup EXIT
 
-echo "Starting server..."
-sudo ip netns exec "$SERVER_NETNS" \
-    ib_write_bw \
-    -d "$SERVER_DEV" \
-    -x "$GID" \
-    -F \
-    ${USE_RDMA_CM:+-R} \
-    --report_gbits \
-    --run_infinitely \
-    -D "$INTERVAL_SEC" \
-    > /dev/null 2>&1 &
+start_server() {
+  sudo ip netns exec "$SERVER_NETNS" \
+      ib_write_bw \
+      -d "$SERVER_DEV" \
+      -x "$GID" \
+      -F \
+      ${USE_RDMA_CM:+-R} \
+      --report_gbits \
+      --run_infinitely \
+      -D "$INTERVAL_SEC" \
+      > /dev/null 2>&1 &
+}
 
-sleep 2 # let the server reach "waiting for client"
-
-echo "Starting client..."
 run_client() {
   sudo ip netns exec "$CLIENT_NETNS" \
       stdbuf -oL ib_write_bw \
@@ -97,10 +139,48 @@ run_client() {
       -D "$INTERVAL_SEC"
 }
 
+# Notices never go to stdout: that stream is the client's throughput, and the chart reads it. With
+# ttyplot drawing, stderr would land on top of the chart too, so there they go to the log alone.
+note() {
+  printf '%s %s\n' "$(date '+%H:%M:%S')" "$1" >> "$RESTART_LOG"
+  [ "$HAVE_TTYPLOT" = 1 ] || echo "$1" >&2
+}
+
+# Keep a client running for as long as this script lives, restarting the pair whenever the pipeline
+# takes it down. Everything reaching stdout is the client's own output, so the reader below is
+# unchanged.
+supervise() {
+  # This runs as the left-hand side of a pipeline, i.e. a subshell, which does NOT inherit the EXIT
+  # trap. Exit on Ctrl-C rather than treating it as one more broken pipeline and restarting.
+  trap 'exit 130' INT TERM
+
+  local attempt=0
+  while [ ! -e "$STOP_FILE" ]; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -gt 1 ]; then
+      note "client stopped — is the pipeline forwarding? restarting both ends (attempt $attempt)"
+      # A blank line is ignored by the reader's filter, but if the reader is GONE this write raises
+      # SIGPIPE and takes the loop down with it. Without it, a Ctrl-C that kills the chart first
+      # would leave us restarting the pair forever against a pipe nobody is holding.
+      echo
+    fi
+
+    stop_both            # never leave half a pair behind: both queue pairs have to be fresh
+    sleep 1
+    start_server
+    sleep 2              # let the server reach "waiting for client"
+    run_client           # blocks until the pipeline breaks it, or until Ctrl-C
+
+    [ -e "$STOP_FILE" ] && break
+    sleep "$RESTART_DELAY_SEC"
+  done
+}
+
+echo "Starting server and client (restarts are automatic; see $RESTART_LOG)..."
 if [ "$HAVE_TTYPLOT" = 1 ]; then
-  run_client \
+  supervise \
     | "${AWK[@]}" '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
     | "$TTYPLOT" -t "RoCE throughput (client -> server)" -u "Gb/s"
 else
-  run_client
+  supervise
 fi

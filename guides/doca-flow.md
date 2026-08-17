@@ -400,15 +400,13 @@ $ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 100
 Keep `./scripts/benchmark.sh` running in a second shell throughout — it starts the server and the
 client together and streams the sender's throughput, so you can see the effect of every change.
 
-**Figure 3 shows the DOCE Flow pipeline you will build.** Each blue pipe is one function, written in the section
+**Figure 3 shows the DOCA Flow pipeline you will build.** Each blue pipe is one function, written in the section
 it is labelled with. Not drawn: `PORT_DEMUX`'s second entry, sending everything coming back from
-the server straight out to the wire; and `PASSTHROUGH`, the worked example, which D.1 aims the root
-at but which nothing reaches once `MARK` and `PASS` exist. `RANDOM_SAMPLE` is built only when
-`--percent` is strictly between 0 and 100; at either extreme the wire feeds `MARK` or `PASS`.
+the server straight out to the wire.
 
 ![The Part D pipeline. Solid arrows are where a packet goes when it matches, dashed ones where it goes when it does not.](../docs/tutorial-flow-pipeline.png){ width=92% }
 
-## D.1 — Write the root pipe
+## D.1 — Write the root pipe (`PORT_DEMUX`)
 
 **First, run it exactly as it comes.** Traffic should sit at line rate — 92 or 184 Gb/s depending on
 the card — and the counter line should stay at zero:
@@ -430,8 +428,9 @@ EAL: Probe PCI driver: mlx5_pci (15b3:a2dc) device: 0000:03:00.0 (socket -1)
 [21:03:04:003060][2652007][DOCA][INF][doca_flow_ecn.c:393][run_report_loop] CE marked: 0, passthrough: 0 (0% marked)
 ```
 
-That is `create_root_pipe_nop()` doing its job: one root pipe, wire traffic straight to the server,
-whatever comes back straight out to the wire, nothing marked and nothing counted.
+Currently, the pipeline is pre-configured with a root pipe that simply forwards packets from the wire
+straight to the server, and performing no additional operation. This pipe is created in the function
+`create_root_pipe_nop()`.
 
 **Now stop it with Ctrl-C, leaving the traffic running.** Throughput carries on unchanged, asside from
 a small dip in throughput as the card falls back to its default OVS forwarding. Start the program again
