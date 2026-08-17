@@ -47,6 +47,18 @@ title: "Part 2 — Programmable Congestion Control with DOCA PCC"
     USEFUL ACCIDENT: x0.99 is the ONLY setting where the sawtooth is legible in the trace -- 61
     distinct rates climbing 65 -> 11320, against 3 rates at x0.90. For SHOWING the loop work, the
     "barely reacts" setting is the good one, which is the opposite of what the section implies.
+
+  REBUILDING. doca-pcc-ecn/meson.build compiles the DPA half through run_command(), which meson
+  runs at CONFIGURE time, so nothing under device/ is in ninja's dependency graph -- measured on a
+  card: zero edges mention device/algo. Plain `ninja` therefore reports "no work to do" after an
+  edit to either TODO and re-links the image built before it. Both stages now say
+  `meson setup --reconfigure build && ninja -C build`; verified with a marker string that can only
+  reach the binary via the DPA half (plain ninja: absent; --reconfigure: present, and it relinks on
+  its own without touching a host file). `rm -rf build` also works and is three times slower.
+
+  The real fix is upstream: make the DPA build a custom_target with depend_files on the device
+  sources, so plain ninja picks edits up and none of the above needs explaining. meson.build came
+  from the umich branch unmodified, so that is a conversation, not a patch.
 -->
 
 
@@ -333,11 +345,14 @@ CNP, then clamp it up to the floor so it can't go below `MIN_RATE`. It's two lin
 **Step 3 — rebuild, reload, and watch it collapse.** Rebuild, then load the controller again in the
 foreground (the traffic and marker from Step 1 are still running):
 ```bash
-ninja -C build
+meson setup --reconfigure build && ninja -C build
 sudo stdbuf -oL ./build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50
 ```
-> **NOTE — the DPA image is built at *configure* time.** If an edit doesn't seem to take effect, do a
-> clean rebuild: `rm -rf build && meson setup build && ninja -C build`.
+> **NOTE — `--reconfigure` is not optional here.** Everything under `device/` — which is where both
+> TODOs live — is compiled into the DPA image at **configure** time, not build time. `ninja` has no
+> dependency on those files at all, so on its own it will cheerfully report `no work to do` and
+> re-link the DPA image you built *before* your edit. Only `host/` changes are ones `ninja` sees by
+> itself.
 
 **Now you should see two things:**
 
@@ -373,7 +388,8 @@ a `static` counter, `AI >> 2`, `RATE_MAX` — every ~1000th call, add the small 
 cap it at `RATE_MAX`. Acting only every ~1000th call is what keeps the increase *gentle* — leave the
 gate out and the rate rockets straight back up and re-triggers congestion.
 
-**Step 2 — rebuild:** `ninja -C build`.
+**Step 2 — rebuild:** `meson setup --reconfigure build && ninja -C build` (as in Stage 1 — plain
+`ninja` will not pick up a change under `device/`).
 
 **Step 3 — run, and this time make congestion come and go.** Load the controller (foreground) and
 traffic as in Stage 1, then, partway through, **stop the marker** in its terminal so the CNPs dry up
@@ -499,8 +515,12 @@ Put `900` back when you're done to restore the tuned controller.
 - **Run it in the foreground** (as shown), so its output prints live on the terminal. Launched in the
   background over SSH it can appear to die after a few seconds — that's the launch, not the program;
   the foreground keeps it attached and visible.
-- **An edit to the algorithm didn't take effect** → the DPA image is built at *configure* time, so do
-  a clean rebuild: `rm -rf build && meson setup build && ninja -C build`.
+- **An edit to the algorithm didn't take effect, and `ninja` said `no work to do`** → you rebuilt with
+  plain `ninja`. The DPA image is built at *configure* time, and nothing under `device/` is in
+  ninja's dependency graph, so it cannot see your edit. Rebuild with
+  `meson setup --reconfigure build && ninja -C build`. (`rm -rf build && meson setup build` also
+  works and is what to reach for if the build itself looks confused, but it is far slower and you
+  should not need it.)
 - **Traffic must use `-R`** (`benchmark.sh` and `run_{server,client}.sh` already do). Without it, the flow isn't
   bound to your algorithm and your handlers never run — the rate won't move at all.
 
