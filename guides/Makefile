@@ -20,6 +20,10 @@ ENGINE ?= xelatex
 
 TEMPLATE := template.tex
 METADATA := tutorial.json
+# Turns the guides' "Try it yourself!" <details> disclosures into the boxed LaTeX environment
+# template.tex defines. Pandoc drops raw HTML when writing LaTeX, so without this the summary lands
+# in the PDF as an unstyled paragraph and nothing marks the exercise at all.
+FILTER   := callouts.lua
 
 MDS  := $(wildcard *.md)
 PDFS := $(MDS:.md=.pdf)
@@ -31,6 +35,7 @@ PDFS := $(MDS:.md=.pdf)
 PANDOC_FLAGS := \
 	--template=$(TEMPLATE) \
 	--metadata-file=$(METADATA) \
+	--lua-filter=$(FILTER) \
 	--pdf-engine=$(ENGINE) \
 	--syntax-highlighting=tango
 
@@ -39,8 +44,8 @@ all: $(PDFS)
 
 pcc-path-steering.pdf: pcc-path-steering-pdf.patch
 
-# Every PDF depends on the shared header and metadata, so correcting a room number or adding an
-# organizer rebuilds all of them rather than just whichever guide was edited last.
+# Every PDF depends on the shared header, metadata and filter, so correcting a room number or
+# adding an organizer rebuilds all of them rather than just whichever guide was edited last.
 #
 # The output is captured so the "Missing character" check below can see it. That check exists
 # because the failure it catches is otherwise invisible: xelatex DROPS a character its font cannot
@@ -57,7 +62,7 @@ pcc-path-steering.pdf: pcc-path-steering-pdf.patch
 # Left as a warning rather than an error: a dropped glyph makes a PDF worse, not unusable, and
 # failing the build would block someone mid-edit over a character they may have meant to change
 # anyway. It is loud enough not to be missed.
-%.pdf: %.md $(TEMPLATE) $(METADATA)
+%.pdf: %.md $(TEMPLATE) $(METADATA) $(FILTER)
 	@echo "  PDF   $@"
 	@tmp=; input="$<"; pdf_patch="$(basename $<)-pdf.patch"; \
 	  if [ -f "$$pdf_patch" ]; then \

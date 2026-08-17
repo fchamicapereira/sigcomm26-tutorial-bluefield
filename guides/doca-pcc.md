@@ -347,7 +347,7 @@ the marker is gone (`TODO 2`). That fall and rise is the DCQCN **sawtooth** — 
 controller working together:
 ```
 PURE_ECN cnp=1001 rate=52428      # cut down while marking
-# ... marker stopped: no new PURE_ECN cuts, TX events raise the rate back to 1048576 ...
+# ... marker stopped: no new PURE_ECN cuts, TX events raise rate to 1048576 ...
 ```
 
 **Stop** with **Ctrl-C** (SIGINT — the graceful stop).

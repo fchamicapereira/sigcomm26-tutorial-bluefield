@@ -286,6 +286,31 @@ $if(highlighting-macros)$
   {\end{tcolorbox}}
 $endif$
 
+% --- the "try it yourself" box -----------------------------------------------------------------
+% Written in the Markdown as a GitHub disclosure -- the .md files ship to participants and are read
+% on GitHub, where this collapses -- and guides/callouts.lua turns it into this environment:
+%
+%     <details>
+%     <summary><b>Try it yourself! ...</b></summary>
+%     ...the exercise...
+%     </details>
+%
+% Deliberately heavier than the code panels it wraps around. Those are a grey hairline on grey, so
+% a box in the same weight would vanish against its own contents -- and standing out from the
+% surrounding prose is the entire job of this one. Hence a full-weight coloured rule, in the same
+% ACMDarkBlue the links already use, over a barely-tinted ground.
+%
+% `before upper` restores \parskip. tcolorbox zeroes it inside the box, and this document separates
+% paragraphs by skip rather than by indent (\parindent is 0pt, set above) -- so without this the
+% steps of the exercise run together into one undifferentiated slab, which is the opposite of what
+% a box around them is for. Measured against the surrounding prose so the rhythm does not change
+% as the reader crosses the border.
+\definecolor{tryitback}{HTML}{F4F8FC}
+\newtcolorbox{tryit}{breakable,enhanced jigsaw,
+  colback=tryitback,colframe=ACMDarkBlue,boxrule=1pt,arc=3pt,
+  left=9pt,right=9pt,top=8pt,bottom=8pt,
+  before upper={\setlength{\parskip}{6pt}}}
+
 \begin{document}
 
 {\raggedright

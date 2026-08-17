@@ -1,6 +1,6 @@
 ---
 title: "Part 1 — Mark ECN"
-subtitle: "Programming the data plane with DOCA Flow"
+subtitle: "Programming the Data Plane with DOCA Flow"
 ---
 
 In this part you program the **data plane** of a BlueField-3: you tell the NIC what to do with
@@ -90,7 +90,8 @@ We generate traffic with `ib_write_bw` — a standard RoCE benchmarking tool (fr
 package) that measures how fast one endpoint can write data to another. It needs a server
 (receiver) and a client (sender).
 
-**Try it yourself! Send RoCE across the cable and measure it!**
+<details open>
+<summary><b>Try it yourself! Send RoCE across the cable and measure it!</b></summary>
 
 Open **two terminals**, both on the Arm cores.
 
@@ -116,6 +117,9 @@ the card's line rate:
  #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]
  65536      5000             92.58              92.56                0.176543
 ```
+
+</details>
+
 To avoid retyping the flags, the repo wraps these as scripts: `./scripts/run_server.sh` and
 `./scripts/run_client.sh` (one per terminal), or **`./scripts/benchmark.sh`**, which starts both
 ends together in a single command and streams the sender's throughput (Ctrl-C stops both). We
@@ -235,8 +239,12 @@ $ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 100
 > this program. `--percent N` is the only flag it takes: CE-mark this share of packets, `[0, 100]`,
 > default 100.
 
-Keep `./scripts/benchmark.sh` running in a second shell throughout — it starts the server and the
+<div class="tryit">
+
+**Keep `./scripts/benchmark.sh` running in a second shell** throughout. It starts the server and the
 client together and streams the sender's throughput, so you can see the effect of every change.
+
+</div>
 
 **Figure 3 shows the DOCA Flow pipeline you will build.** Each blue pipe is one function, written in the section
 it is labelled with. Not drawn: `PORT_DEMUX`'s second entry, sending everything coming back from
