@@ -53,9 +53,10 @@ JOBS = [
         popup=dict(left=1560, top=1226, width=1440),   # smaller, and inside the right-hand pane
         arrows=[
             # into the tall bars on the left: full line rate, nothing reacting yet
-            dict(text="no ECN yet", at=(676, 1004), tip=(320, 1180)),
+            dict(text="no ECN", at=(676, 1004), tip=(320, 1180)),
             # into the low bars on the right: CNPs arriving, controller cutting the rate
-            dict(text="ECN arriving — rate cut", at=(700, 1250), tip=(1080, 1400)),
+            # straight down out of the label's centre (it is 237px wide from x=700)
+            dict(text="with ECN", at=(700, 1250), **{"from": (818, 1280)}, tip=(818, 1404)),
         ],
     ),
 ]
@@ -107,7 +108,9 @@ def compose(job):
     for a in job["arrows"]:
         page.insert_text(fitz.Point(*a["at"]), a["text"], fontsize=54, color=accent,
                          fontfile=str(FONT), fontname="LB")
-        arrow(page, (a["at"][0] - 16, a["at"][1] + 22), a["tip"], accent)
+        # tail defaults to the label's lower-left, which reads fine when the target is off to the
+        # left; from= overrides it for a label whose target sits underneath.
+        arrow(page, a.get("from", (a["at"][0] - 16, a["at"][1] + 22)), a["tip"], accent)
 
     # --- ring the lines the popup magnifies -----------------------------------------------------
     page.draw_rect(region, color=accent, width=7)
