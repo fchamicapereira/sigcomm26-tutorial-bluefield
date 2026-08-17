@@ -173,7 +173,19 @@ The repository (`/home/s26t/sigcomm26-tutorial-bluefield-participants`) has one 
 `doca-2` and `doca-3`. Pick the relevant one for your chosen Bluefield. In this part of the tutorial, you
 will be editing the `doca-flow/doca_flow_ecn.c` file.
 
-Everything in `doca-2/doca-flow/doca_flow_ecn.c` is done except for three function bodies, marked
+**Which of the two is yours?** Run this command to find out which version of DOCA is installed on your card:
+
+```bash
+$ cat /opt/mellanox/doca/applications/VERSION
+2.9.1008
+```
+
+Only the first number matters: **`2.x` → use `doca-2`**, **`3.x` → use `doca-3`**. The
+exercises are identical in the two versions, down to the same three TODOs, differing only in a
+few DOCA calls renamed between the generations, which are already written for you in each tree.
+Every command below says `doca-2`; substitute with `doca-3` throughout if that is what you have.
+
+Everything in `doca-flow/doca_flow_ecn.c` is done except for three function bodies, marked
 `TODO 1` to `TODO 3`. The program already forwards traffic as shipped.
 
 Laid out logically, the `doca_flow_ecn.c` file is logically separated into four different phases.

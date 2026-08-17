@@ -100,15 +100,58 @@ stop_both() {
 # subshell (the left-hand side of the pipe below), so it cannot see a variable — hence a file.
 STOP_FILE="$(mktemp -u /tmp/benchmark-stop.XXXXXX)"
 
+# WHY Ctrl-C NEEDS HELP HERE. These cards set `Defaults use_pty` in /etc/sudoers, so sudo runs its
+# command on a pseudo-terminal and, to pass keystrokes through to it, puts OUR terminal into raw
+# mode — ISIG included — for as long as it runs. With ISIG off the line discipline never turns ^C
+# into SIGINT: the keystroke arrives as a plain byte that nothing in this pipeline reads. bash is
+# therefore never signalled, the EXIT trap below never fires, and both ib_write_bw ends keep going
+# until the terminal itself is closed.
+#
+# Measured on a tutorial card: `stty -a` reads `-isig` for the whole run — with ttyplot AND without
+# it — and two Ctrl-Cs in a row leave the process tree byte-for-byte identical. (ttyplot is not the
+# culprit, though it looks like one: on its own it leaves ISIG alone and quits on `q` or ^C.)
+#
+# So take ISIG back, and keep taking it back: every restart in supervise() spawns a fresh pair of
+# sudos, and each one raw-modes the terminal again, so a one-shot at startup would hold only until
+# the first restart. Once a second is plenty — the only window it leaves is the moment just after a
+# restart, when there is barely anything running to stop.
+#
+# ONLY ISIG is touched. sudo wants the rest of raw mode to forward keystrokes to the command, and
+# ib_write_bw has no use for a keyboard, so taking this one flag back costs nothing.
+TTY_SAVED=""
+ISIG_KEEPER=""
+start_isig_keeper() {
+  [ -t 0 ] || return 0                       # not a terminal: nothing to fix, nothing to restore
+  TTY_SAVED="$(stty -g </dev/tty 2>/dev/null)" || { TTY_SAVED=""; return 0; }
+  # EVERY stty here reads /dev/tty explicitly rather than inheriting stdin. With job control off --
+  # which is the case in any script -- bash redirects an asynchronous command's stdin from
+  # /dev/null, so a backgrounded `stty isig` would silently be configuring /dev/null and give up on
+  # the first pass. Cost me a full test run to find; the loop looked alive and did nothing.
+  #
+  # It runs in this script's process group, so its tcsetattr counts as a foreground one and does not
+  # raise SIGTTOU, and it dies to the same Ctrl-C it exists to enable.
+  while :; do
+    stty isig </dev/tty 2>/dev/null || exit 0   # terminal gone: stop rather than spin
+    sleep 1
+  done &
+  ISIG_KEEPER=$!
+}
+
 CLEANED_UP=""
 cleanup() {
   [ -n "$CLEANED_UP" ] && return
   CLEANED_UP=1
   : > "$STOP_FILE"
+  [ -n "$ISIG_KEEPER" ] && kill "$ISIG_KEEPER" 2>/dev/null
   echo "Stopping server and client..."
   stop_both
   sleep 1
   rm -f "$STOP_FILE"
+  # Hand the terminal back as we found it. sudo restores its own idea of the modes when it exits,
+  # but a run killed mid-flight may leave no sudo around to do it, and a shell left in raw mode is
+  # the second-worst thing to hand a participant after a benchmark that will not stop.
+  [ -n "$TTY_SAVED" ] && stty "$TTY_SAVED" </dev/tty 2>/dev/null
+  return 0
 }
 # EXIT alone is enough: bash runs it on normal completion AND after an uncaught INT/TERM.
 trap cleanup EXIT
@@ -177,6 +220,7 @@ supervise() {
 }
 
 echo "Starting server and client (restarts are automatic; see $RESTART_LOG)..."
+start_isig_keeper
 if [ "$HAVE_TTYPLOT" = 1 ]; then
   supervise \
     | "${AWK[@]}" '$1 == "65536" && NF == 5 { print $4; fflush(); }' \
