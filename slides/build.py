@@ -34,9 +34,9 @@ SHOTS = HERE / "images"
 FONTDIR = HERE / "fonts"
 OUT = HERE / "hands-on.html"
 
-# Stand-in for a link that is not decided yet. Slides may ship with it; the build counts them and
-# says so at the end, so an unreplaced link is loud rather than something you meet on the projector.
-TODO_URL = "https://github.com/REPLACE-ME"
+# Stand-in for a guide that does not exist yet. Slides may ship with it; the build counts them and
+# says so at the end, so an unreplaced one is loud rather than something you meet on the projector.
+TODO_MARK = "REPLACE-ME"
 
 # One group per card. The names come from admin/machines.txt -- the fleet's own list, the same one
 # admin/fleet.py drives -- so a card added or pulled changes the slide by itself and a group can
@@ -45,11 +45,7 @@ MACHINES = HERE.parent / "admin" / "machines.txt"
 TAILNET = "tail4f7fd9.ts.net"
 
 # Shown on the slide, so everyone in the room can type it. Rotate it after the tutorial.
-PASSWORD = "Smartnics-Roces-@-Sigcomm"
-
-# The repo participants clone: the one admin/update_participants_repo_on_github.py writes. The
-# per-part guide links derive from it, so a rename is one edit here.
-PARTICIPANTS_REPO = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants"
+PASSWORD = "Smartnics-Roce-@-Sigcomm"
 
 TITLE = "Hands on with SmartNICs"
 
@@ -134,12 +130,6 @@ def logo_uri(ident):
     return uri
 
 
-def pretty(url):
-    """A URL as it should be READ off a projector, not as it is typed. The scheme is noise at 30px
-    and nobody types it anyway; the href keeps the real thing."""
-    return url.removeprefix("https://").removeprefix("http://")
-
-
 def image_uri(path):
     """A screenshot or figure, inlined. Same no-network rule as everything else here."""
     mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(path.suffix.lower())
@@ -211,38 +201,82 @@ def group_table():
                 f'<b>{names[i]}</b><span class="sfx">.{TAILNET}/</span></a></td>')
         rows.append(f"<tr>{''.join(cells)}</tr>")
 
-    head = ('<tr class="head"><td>Group</td><td>Address</td>'
-            '<td class="gap">Group</td><td>Address</td></tr>')
+    # The header's group cells carry .n too, so the heading and the numbers under it can never
+    # drift out of alignment -- one rule moves both.
+    head = ('<tr class="head"><td class="n">Group</td><td>Node Address</td>'
+            '<td class="n gap">Group</td><td>Node Address</td></tr>')
     return f'<div class="panel"><table class="groups">{head}{"".join(rows)}</table></div>'
 
 
-def part(eyebrow, title, shot_name, guide=None, url=None):
-    """The two slides every hands-on part gets: where its guide is, then what success looks like.
+def overview():
+    """The two tasks as one picture: two boxes and the loop that joins them.
+
+    The arrows are the point of the slide. Task 1 and Task 2 are not two unrelated exercises --
+    Part 1 builds the congestion signal and Part 2 builds the reaction to it, and the reaction
+    changes the traffic that gets marked. Drawing only the forward arrow would leave that as two
+    boxes side by side; drawing the return closes the loop, which is what DCQCN actually is.
+
+    Each box also says which engine it runs on, because that is the other half of the picture: the
+    same card, two different programmable things -- the eSwitch pipeline and the DPA's cores.
+    """
+    def box(n, cls, name, kind, where):
+        return (f'<div class="task {cls}"><div class="tnum">Part {n}</div>'
+                f'<div class="tname">{name}</div>'
+                f'<div class="tkind">{kind}</div>'
+                f'<div class="twhere">{where}</div></div>')
+
+    # Each arrow takes the colour of the box it leaves, which is what tells you the direction now
+    # that the labels are gone. One marker per direction: orient="auto" turns the head to follow
+    # its own line, so the return arrow needs nothing but its own colour.
+    arrows = """
+      <svg class="flow" viewBox="0 0 170 160" width="170" height="160" aria-hidden="true">
+        <defs>
+          <marker id="hd-f" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto">
+            <path d="M0,0 L9,3.5 L0,7 z" fill="#2C7A52"/>
+          </marker>
+          <marker id="hd-b" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto">
+            <path d="M0,0 L9,3.5 L0,7 z" fill="#6A4C93"/>
+          </marker>
+        </defs>
+        <line x1="6" y1="58" x2="156" y2="58" stroke="#2C7A52" stroke-width="4"
+              marker-end="url(#hd-f)"/>
+        <line x1="164" y1="102" x2="14" y2="102" stroke="#6A4C93" stroke-width="4"
+              marker-end="url(#hd-b)"/>
+      </svg>
+    """
+    return ('<div class="tasks">'
+            + box(1, "p1", "Mark ECN", "Packet Processing", "eSwitch &middot; hardware pipeline")
+            + arrows
+            + box(2, "p2", "Congestion Control", "Programmable Transport",
+                  "DPA &middot; programmable cores")
+            + "</div>")
+
+
+def part(eyebrow, title, shot_name, guide, cls, zoom_shot=None):
+    """The slides every hands-on part gets: where its guide is, then what success looks like.
 
     One helper rather than three near-copies. The parts differ only in their name and their guide,
     and a deck where Part 2 has drifted a font size away from Part 1 reads as a mistake from the
     third row.
 
-    guide= names a file at the root of the participants repo, and the slide shows the repo with the
-    filename under it: the full blob URL is ~100 characters, which is not a thing anyone reads off
-    a projector, while the repo alone fits on one line and is what they need to reach anyway.
-    url= is for a part whose guide does not live there (or does not exist yet).
+    guide= is the file at the root of the checkout, and it is the whole line: the directory is the
+    same for all three parts, so it was a shape people stopped reading after Part 1.
+
+    cls= is the part's colour class, the same one its box wears in the overview diagram. It sets
+    --accent for the slide, which the eyebrow, the filename and the outcome caption all read, so a
+    part is the same colour everywhere it appears and one edit moves all of it.
+
+    zoom_shot= adds a third slide. A 3024px capture shown whole answers "is this my screen?" and a
+    magnified crop answers "are my numbers moving?"; they are different questions and one image
+    cannot be sized for both, so a part that needs the second gets its own slide for it.
     """
-    if guide:
-        href, shown = f"{PARTICIPANTS_REPO}/blob/main/{guide}", pretty(PARTICIPANTS_REPO)
-        note = f'<p class="filenote">&rarr; <code>{guide}</code></p>'
-    else:
-        href = shown = url
-        note = ""
-        shown = pretty(shown)
-    return [
+    slides = [
         f"""
-    <div class="centred">
-      <div class="eyebrow">{eyebrow} &mdash; in progress</div>
+    <div class="centred {cls}">
+      <div class="eyebrow">{eyebrow}</div>
       <h2>{title}</h2>
-      <p class="lead">The guide:</p>
-      <p class="url"><a href="{href}">{shown}</a></p>
-      {note}
+      <p class="lead">The guide on the node</p>
+      <p class="gfile">{guide}</p>
     </div>
     """,
         # No h2 here on purpose. These screenshots are 3024px-wide terminals, and a 62px heading
@@ -250,12 +284,20 @@ def part(eyebrow, title, shot_name, guide=None, url=None):
         # slide's whole job is "does your screen look like this?", so the caption folds into one
         # line and the picture gets everything else.
         f"""
-    <div class="centred">
+    <div class="centred {cls}">
       <div class="shot-cap">{eyebrow} &middot; {title} &mdash; what you should see</div>
       {shot(shot_name)}
     </div>
     """,
     ]
+    if zoom_shot:
+        slides.append(f"""
+    <div class="centred {cls}">
+      <div class="shot-cap">{eyebrow} &middot; {title} &mdash; what you should see</div>
+      {shot(zoom_shot)}
+    </div>
+    """)
+    return slides
 
 
 # --- the deck --------------------------------------------------------------------------------
@@ -279,9 +321,17 @@ DECK = [
       <p class="password">Password <code>{PASSWORD}</code></p>
     </div>
     """,
-    *part("Part 1", "DOCA Flow", "part1-doca-flow-outcome", guide="doca-flow.pdf"),
-    *part("Part 2", "DOCA PCC", "part2-doca-pcc-outcome", guide="doca-pcc.pdf"),
-    *part("Bonus", "Steering", "bonus-steering-outcome", url=TODO_URL),
+    f"""
+    <div class="centred">
+      {overview()}
+      <p class="lead">Part 1 creates the congestion signal. Part 2 reacts to it.</p>
+    </div>
+    """,
+    *part("Part 1", "Mark ECN", "part1-doca-flow-outcome", guide="doca-flow.pdf", cls="p1",
+          zoom_shot="part1-doca-flow-zoom"),
+    *part("Part 2", "Congestion Control", "part2-doca-pcc-outcome", guide="doca-pcc.pdf",
+          cls="p2", zoom_shot="part2-doca-pcc-zoom"),
+    *part("Bonus", "Steering", "bonus-steering-outcome", guide=TODO_MARK, cls="pb"),
 ]
 
 CSS = """
@@ -307,11 +357,9 @@ hr{border:0;border-top:1.5px solid #C8C8C8;width:58%;margin:34px auto}
 
 h2{font-family:'BiolinumB',sans-serif;font-weight:700;font-size:62px;color:#111;line-height:1.1}
 .lead{font-family:'Biolinum',sans-serif;font-size:33px;color:#333;margin-top:40px}
-.url{margin-top:22px}
-/* 30px, not larger: the repo name is 68 characters, and at 42px it wrapped mid-string. One
-   unbroken line people can read off and type beats a bigger one they have to reassemble. */
-.url a{font-family:'Inconsolata',monospace;font-size:30px;color:#4A7AAB;text-decoration:none;
-       border-bottom:2px solid rgba(74,122,171,.3);padding-bottom:3px;word-break:break-all}
+/* The guide's filename, alone on the line now that the directory is gone -- so it is sized and
+   coloured as the thing being pointed at rather than as a footnote under a path. */
+.gfile{margin-top:20px;font-family:'Inconsolata',monospace;font-size:44px;color:var(--accent,#2C6394)}
 
 /* The group table, in a panel so the addresses read as one object to find yourself in rather than
    loose text on a white field. inline-block keeps the panel exactly as wide as its contents and
@@ -327,7 +375,7 @@ h2{font-family:'BiolinumB',sans-serif;font-weight:700;font-size:62px;color:#111;
 .groups .head td{font-family:'Biolinum',sans-serif;font-size:17px;letter-spacing:1.2px;
                  text-transform:uppercase;color:#111;padding-bottom:10px;
                  border-bottom:1px solid #D8DFE6}
-.groups .n{font-family:'Biolinum',sans-serif;color:#111;text-align:right;padding-right:16px}
+.groups .n{font-family:'Biolinum',sans-serif;color:#111;text-align:center;padding-right:16px}
 /* The 44px trough between the columns, split either side of the divider so it stays centred. */
 .groups td:nth-child(2){padding-right:22px}
 .groups .gap{padding-left:22px;border-left:1px solid #E8ECF0}
@@ -340,27 +388,45 @@ h2{font-family:'BiolinumB',sans-serif;font-weight:700;font-size:62px;color:#111;
 .password code{font-family:'Inconsolata',monospace;font-size:30px;color:#111;background:#F0F3F6;
                 border:1px solid #E0E5EA;border-radius:7px;padding:4px 14px;margin-left:10px}
 
+/* The two-task diagram. stretch, not center, so the boxes match height whatever their text does --
+   one title wrapping to two lines must not leave the pair looking misaligned. */
+.tasks{display:flex;align-items:stretch;justify-content:center}
+/* A colour per part, carried through the box, its label and the arrow leaving it, so the two
+   halves of the tutorial stay told apart wherever they appear. --accent is set by .p1/.p2 and
+   read by everything inside. */
+.task{display:flex;flex-direction:column;justify-content:center;width:455px;min-height:420px;
+      padding:40px 34px;border:1px solid;border-radius:14px;text-align:center}
+/* One accent per part, defined once and worn by its diagram box AND its two slides. */
+.p1{--accent:#2C7A52}
+.p2{--accent:#6A4C93}
+.pb{--accent:#2C6394}
+.task.p1{background:#ECF6F0;border-color:#C2E0CF}
+.task.p2{background:#F2EEF8;border-color:#D6CBE9}
+.tnum{font-family:'Biolinum',sans-serif;font-size:23px;letter-spacing:1.8px;
+      text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+.tname{font-family:'BiolinumB',sans-serif;font-weight:700;font-size:42px;color:#111;line-height:1.1}
+.tkind{font-family:'Biolinum',sans-serif;font-size:31px;color:var(--accent);margin-top:16px}
+.twhere{font-family:'Biolinum',sans-serif;font-size:22px;color:#555;margin-top:12px}
+.flow{flex:0 0 auto;align-self:center;margin:0 8px}
+
 /* Part slides. The eyebrow carries which part you are in, so the h2 can be the plain name of the
    thing -- "DOCA Flow", not "Part 1: DOCA Flow" wrapped onto two lines. */
 .eyebrow{font-family:'Biolinum',sans-serif;font-size:26px;letter-spacing:1.5px;
-         text-transform:uppercase;color:#4A7AAB;margin-bottom:18px}
+         text-transform:uppercase;color:var(--accent,#4A7AAB);margin-bottom:18px}
 /* On an outcome slide the caption is not a kicker over a heading -- it IS the heading, the only
-   text on the slide, so it is sized as one. 40px: the widest of the three captions then sits at
-   81% of the line (46px would be 93%, too tight for a part with a longer name), and it costs the
-   screenshot 31px of width against a 26px caption -- 3.6%, for a caption half again as large.
+   text on the slide, so it is sized as one. 36px: the longest caption is "Part 2 - Congestion Control - what you should see", which at 40px
+   ran to 101% of the line. 36 puts it at 91%, which leaves room for a part named longer still.
    Tracking drops to .5px because 1.5px is a small-text trick that looks loose this big. */
-.shot-cap{font-family:'Biolinum',sans-serif;font-size:40px;letter-spacing:.5px;
-          text-transform:uppercase;color:#4A7AAB;margin-bottom:18px}
-.filenote{margin-top:16px;font-family:'Biolinum',sans-serif;font-size:24px;color:#555}
-.filenote code{font-family:'Inconsolata',monospace;font-size:26px;color:#111}
+.shot-cap{font-family:'Biolinum',sans-serif;font-size:36px;letter-spacing:.5px;
+          text-transform:uppercase;color:var(--accent,#4A7AAB);margin-bottom:18px}
 
-/* 495px is the tallest that still clears the 40px caption and the 70px padding on a 720px stage --
+/* 500px is the tallest that still clears the 40px caption and the 70px padding on a 720px stage --
    measured, not guessed. The screenshots are wide (1.66), so height is what binds: every pixel
    here is 1.66 of width. contain keeps the aspect ratio of whatever gets dropped in, and the
    placeholder below is the same height so the slide does not jump when the real one arrives. */
-.shot{display:block;margin:14px auto 0;max-width:100%;max-height:495px;object-fit:contain;
+.shot{display:block;margin:14px auto 0;max-width:100%;max-height:500px;object-fit:contain;
       border:1px solid #DDD;border-radius:4px}
-.shot-missing{display:flex;align-items:center;justify-content:center;width:70%;height:495px;
+.shot-missing{display:flex;align-items:center;justify-content:center;width:70%;height:500px;
               margin:34px auto 0;border:2px dashed #CCC;border-radius:6px;
               font-family:'Biolinum',sans-serif;font-size:26px;color:#999;line-height:1.9}
 .shot-missing code{font-family:'Inconsolata',monospace;font-size:23px;color:#777}
@@ -423,8 +489,8 @@ OUT.write_text(html)
 kb = len(html.encode()) // 1024
 print(f"  wrote {OUT.name}  ({len(DECK)} slides, {kb} KB, self-contained)")
 
-pending = html.count(f'href="{TODO_URL}"')
+pending = html.count(TODO_MARK)
 if pending:
-    print(f"  TODO: {pending} link(s) still point at {TODO_URL}")
+    print(f"  TODO: {pending} guide(s) still show the {TODO_MARK} placeholder")
 if "--open" in sys.argv:
     subprocess.run(["open", str(OUT)])
