@@ -1,5 +1,5 @@
 ---
-title: "Part 2 — Do CC"
+title: "Part 2 — Do Congestion Control"
 subtitle: "Programmable Congestion Control with DOCA PCC"
 ---
 
@@ -13,10 +13,8 @@ watched a flow's send rate **collapse** the moment congestion appears and **reco
 and tuned how aggressively it reacts.
 
 > **Prerequisites.**
-> - You have done **Part 1** (`doca-flow.pdf`) — PCC reacts to the ECN marks you produced there.
-> - You are on the **Arm cores** of a BlueField-3 with this repo checked out and `sudo` access.
-> - One firmware knob, **`USER_PROGRAMMABLE_CC=1`**, must be live for any PCC program to start — on
->   the tutorial cards this is already set for you (details in Appendix A).
+> (A) You have done **Part 1** (`doca-flow.pdf`);
+> (B) one firmware knob, **`USER_PROGRAMMABLE_CC=1`**, must be live for any PCC program to start (we set this already for you).
 
 # Step 1 — Where the algorithm runs
 
@@ -24,23 +22,19 @@ A DOCA PCC program comes in two pieces that run in two different places:
 
 ![The two halves of a DOCA PCC program. The host side only loads and supervises; every packet-time decision happens on the DPA, inside the algorithm you write.](../docs/pcc-two-halves.png){ width=95% }
 
-- **The host program** (`host/pcc_ecn_rp.c`) is just a **loader and supervisor**. It uploads your
+- **The host program** is just a loader and supervisor. It uploads your
   compiled algorithm to the NIC, opens the PCC context, and then sits there keeping it alive and
-  printing logs. It does **not** run the algorithm itself.
-- **The algorithm** runs on the **DPA** — the *Data-Path Accelerator*, a cluster of small, highly
-  parallel processors inside the BlueField-3. That is where the C code you'll edit actually executes.
+  printing logs.
+- **The algorithm** runs on the **DPA** — the *Data-Path Accelerator* inside the BlueField-3. That is
+  where the C code you'll edit actually executes.
 
-> **INFO — what is the DPA, and why not the Arm cores?** The Arm cores are general-purpose Linux
-> CPUs; they are too far from the wire to make a per-flow rate decision fast enough. The DPA sits
-> right on the data path and is built for exactly this kind of tiny, frequent, reactive computation.
-> You write the algorithm in C, a special compiler (`dpacc`) turns it into a DPA program, and the
-> host loader ships it onto the NIC. (More in Appendix A.)
+> **INFO — what is the DPA?** It's a cluster of small processors on the NIC's own data path — right
+> by the wire, where the general-purpose Arm cores are too far away to set a per-flow rate fast
+> enough. You write the algorithm in C, `dpacc` (a compiler specific to the DPA) compiles it, and the host loader ships it onto the NIC.
 
-**What your algorithm actually outputs: a rate.** Its whole job is to set **one number per flow**: a
-target send **rate**. It never touches a packet and never paces anything itself. It writes the rate
-into a `results` struct, and when it returns, the NIC programs that flow's **hardware rate limiter**
-to that value. From then on the *hardware* paces the packets — at line speed, with your algorithm
-nowhere in the loop — until the next event, when your code runs again to revise the number.
+**What the algorithm produces: a rate.** For each flow it writes a target send rate into a `results`
+struct and returns. It never touches a packet or paces anything itself; the NIC loads that rate into
+the flow's **hardware rate limiter**, which paces every packet according to it.
 
 > **INFO — rate is a fraction, not a bits-per-second.** The rate is a fixed-point number where
 > **`1 << 20` (= 1,048,576) means "100% of line rate."** So `524288` is 50%, and a small floor value
@@ -57,14 +51,13 @@ to the NIC, and running it live.
 
 > **NOTE — the algorithm is deliberately incomplete right now.** The controller you're about to run
 > is a **scaffold**: the two reactions that move the rate are left blank (you write them in Step 4).
-> So it loads, runs, and *sees* congestion — but it won't change the rate yet. That's expected; this
-> step is about the plumbing, not the policy.
+> So it loads, runs, and *sees* congestion — but it won't change the rate yet.
 
 **Try it yourself! Build the controller and watch it run.**
 
 **Build.** On the card's Arm cores, from the repo root:
 ```bash
-cd doca-2 && meson setup build && ninja -C build
+cd doca-X && meson setup build && ninja -C build
 # => build/doca-pcc-ecn/doca_pcc_ecn_rp   (the host loader; the DPA program is compiled into it)
 ```
 That one step compiles the C you'll edit in Step 4 into a **DPA image** and links it into the host
