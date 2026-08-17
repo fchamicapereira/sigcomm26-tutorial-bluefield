@@ -16,11 +16,20 @@
 # same history is a `git clone` away from any laptop, and this script does not change that. Rewriting
 # or truncating the remote's history is the only thing that does.
 #
-# BECAUSE .git IS GONE there is no such thing as updating this tree: with no remote, no branch and no
-# index, the only way to move it forward is to replace it. So the default refuses to touch a
-# destination that already exists, and --force replaces it wholesale. On a machine somebody has been
-# working on, --force deletes their exercise work. There is no way for this script to tell the
-# difference -- that is the cost of taking the history away.
+# BECAUSE .git IS GONE there is no such thing as merging into this tree: with no remote, no branch
+# and no index, the only way to move it forward is to throw the contents away and lay down a fresh
+# set. So the default refuses to touch a destination that already exists, and --force replaces
+# everything in it. On a machine somebody has been working on, --force deletes their exercise work.
+# There is no way for this script to tell the difference -- that is the cost of taking the history
+# away.
+#
+# THE DIRECTORY ITSELF SURVIVES that replacement: --force empties it and refills it, rather than
+# unlinking it and renaming a new one into place. Everything about the directory that is not its
+# contents therefore persists -- its inode, so a participant's open shell sitting in it keeps
+# working instead of finding itself on a deleted directory; and its ownership, mode and any ACL or
+# mount set on it by hand. The cost is that the swap is no longer one atomic rename. It is a pair
+# of them (contents out, contents in) and a reader in the tree during that instant can see it
+# empty, so the window is kept to renames within one directory and nothing is copied.
 #
 # fleet.py pipes this over stdin (`ssh <host> bash -s -- <args>`), so it MUST stay self-contained:
 # it cannot source anything else from the repo, because on a fresh machine nothing else is there
@@ -68,23 +77,53 @@ fi
 
 # Kept to ONE line: fleet.py's summary table shows the last line a failing script printed, so a
 # message wrapped over three of them arrives in the NOTE column as a dangling fragment.
-if [ -e "$DEST" ] && [ "$FORCE" -eq 0 ]; then
-	die "$DEST already exists and was left untouched; re-run with --force to delete and reinstall it (this destroys any work in that tree)"
+if { [ -e "$DEST" ] || [ -L "$DEST" ]; } && [ "$FORCE" -eq 0 ]; then
+	die "$DEST already exists and was left untouched; re-run with --force to empty and refill it (this destroys any work in that tree)"
+fi
+
+# Refilling in place is only meaningful for a real directory. A symlink is the interesting one: it
+# passes -d when it points at a directory, and `find` would then decline to descend into it and
+# report nothing to move, which would silently merge the new tree into whatever it points at. Both
+# of these mean somebody arranged something here by hand, so say so rather than guess at it.
+if [ -L "$DEST" ]; then
+	die "$DEST is a symlink; remove it by hand if the link is stale, or point --dest at the real directory"
+fi
+if [ -e "$DEST" ] && [ ! -d "$DEST" ]; then
+	die "$DEST exists and is not a directory; remove it by hand and re-run"
 fi
 
 PARENT="$(dirname "$DEST")"
 BASE="$(basename "$DEST")"
 [ -d "$PARENT" ] || die "$PARENT does not exist"
 
-# Staged next to the destination rather than in /tmp, so the final rename is a move within one
-# filesystem: the tree is either the old one or the new one, never half-written.
+# Staged next to the destination rather than in /tmp, so that moving the tree into place is a rename
+# within one filesystem and never a copy. TMP holds the new contents until they are known good; OLD
+# holds the previous ones until the new ones are in.
 TMP="$PARENT/.$BASE.new.$$"
 OLD="$PARENT/.$BASE.old.$$"
 
-cleanup() { as_tuser rm -rf "$TMP"; }
+# Both staging directories go on the way out, whatever happened -- with one exception. If the
+# rollback below could not put the old contents back, they are all that is left of somebody's work,
+# and deleting them on the way out would finish the job the failure started. That path sets RESCUE
+# and prints where they are.
+RESCUE=0
+cleanup() {
+	if [ "$RESCUE" -eq 0 ]; then
+		as_tuser rm -rf "$TMP" "$OLD"
+	fi
+}
 trap cleanup EXIT
 
-as_tuser rm -rf "$TMP"
+as_tuser rm -rf "$TMP" "$OLD"
+
+# Move every entry of $1 into $2, dotfiles included, leaving $1 itself in place. `find -exec +`
+# rather than a shell glob for two reasons: the directory is read by the tutorial user rather than
+# by whoever is driving the script, and names the shell would otherwise take an interest in --
+# leading dashes, spaces, newlines -- arrive as plain arguments. $0 carries the destination so that
+# "$@" can be nothing but the found paths.
+move_contents() {
+	as_tuser find "$1" -mindepth 1 -maxdepth 1 -exec sh -c 'mv -- "$@" "$0"' "$2" {} +
+}
 
 # --depth 1 for the obvious reason and one less obvious one: the history never lands on the machine
 # in the first place, so the window between clone and `rm -rf .git` holds nothing worth reading.
@@ -108,22 +147,29 @@ if [ -n "$leftover" ]; then
 	die "found $leftover after the clone -- refusing to install a tree with history"
 fi
 
-if [ -e "$DEST" ]; then
-	as_tuser mv "$DEST" "$OLD"
+if [ -d "$DEST" ]; then
+	# Empty the directory and refill it, keeping the directory itself -- see the header. The old
+	# contents are moved aside rather than deleted outright so that there is something to put back
+	# if the refill fails partway; they are only unlinked once the new tree is in place.
+	as_tuser mkdir "$OLD"
+	move_contents "$DEST" "$OLD"
+
+	if ! move_contents "$TMP" "$DEST"; then
+		# Take back whatever did land, so that restoring cannot collide with a half-written tree.
+		# Anything moved into TMP here is deleted by the trap, which is right: it is reclonable.
+		if move_contents "$DEST" "$TMP" && move_contents "$OLD" "$DEST"; then
+			die "could not fill $DEST; the previous contents were put back"
+		fi
+		RESCUE=1
+		die "could not fill $DEST AND could not put the previous contents back -- they are in $OLD and $TMP on this machine, recover them by hand before re-running"
+	fi
 	action="replaced"
 else
+	if ! as_tuser mv "$TMP" "$DEST"; then
+		die "could not move $TMP into place"
+	fi
 	action="installed"
 fi
-
-if ! as_tuser mv "$TMP" "$DEST"; then
-	if [ -e "$OLD" ]; then
-		as_tuser mv "$OLD" "$DEST"
-	fi
-	die "could not move $TMP into place"
-fi
-
-trap - EXIT
-as_tuser rm -rf "$OLD"
 
 emit action      "$action"
 emit sha         "$sha"

@@ -58,6 +58,11 @@ TUTORIAL_USER = "s26t"
 # its history holds every earlier state of the exercise. Same HTTPS reasoning as above.
 PARTICIPANTS_REPO_URL = "https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants.git"
 
+# Fixed, and deliberately not the branch `sync` picks. That one defaults to whatever this checkout
+# has in HEAD, because our repo is the one being developed on branches; the participant repo is
+# generated output with a single branch, so a topic branch here names nothing over there.
+PARTICIPANTS_BRANCH = "main"
+
 # Where sync_participants.sh puts it, repeated here only so the --force warning can name the exact
 # directory it is about to delete -- spelled as a real path, because someone reading that warning
 # may well want to go and look at it before answering. Derived the same way the script does
@@ -426,7 +431,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 def cmd_sync_participants(args: argparse.Namespace) -> int:
     machines = load_inventory(INVENTORY, args.machines)
-    script_args = ["--repo", PARTICIPANTS_REPO_URL, "--branch", BRANCH, "--user", TUTORIAL_USER]
+    script_args = ["--repo", PARTICIPANTS_REPO_URL, "--branch", PARTICIPANTS_BRANCH, "--user", TUTORIAL_USER]
     if args.force:
         script_args.append("--force")
 
@@ -436,7 +441,9 @@ def cmd_sync_participants(args: argparse.Namespace) -> int:
         if not confirm_destructive(
             "sync-participants --force DELETES the participant repo on every machine below.",
             [
-                f"On each one {PARTICIPANTS_DEST} is removed and replaced by a fresh clone.",
+                f"On each one everything inside {PARTICIPANTS_DEST} is deleted and replaced by a",
+                "fresh clone. The directory itself stays, so shells sitting in it keep working;",
+                "nothing that was in it does.",
                 "Everything a participant has done in that tree goes with it: edited exercises,",
                 "build directories, captures, notes. There is no backup and no undo.",
                 "",
@@ -449,7 +456,7 @@ def cmd_sync_participants(args: argparse.Namespace) -> int:
             return 1
 
     print(
-        f"sync-participants: {BRANCH} -> {len(machines)} machine(s)"
+        f"sync-participants: {PARTICIPANTS_BRANCH} -> {len(machines)} machine(s)"
         f"{' (--force: whatever is in the destination will be DELETED)' if args.force else ''}"
     )
 
@@ -868,19 +875,22 @@ def main() -> int:
             "checkout would hand all of it to anyone who ran `git log -p`. This removes it FROM "
             "THE MACHINE only; if that repo is public, the same history is one clone away from "
             "any laptop, and rewriting the remote is the only thing that changes. "
-            "Because .git is gone there is no way to update the tree in place, only to replace "
-            "it. So a destination that already exists is LEFT ALONE and reported as a failure for "
-            "that machine -- the default can never destroy anything. --force is the only way to "
-            "replace it, and it deletes whatever was there including a participant's work, so it "
-            "stops and makes you type 'yes, I understand' in full first. There is no flag that "
-            "skips that prompt and it cannot run unattended. Use the 'sync' verb for OUR repo, "
-            "which stays a real checkout and can be fast-forwarded."
+            "Because .git is gone there is no way to merge into the tree, only to throw its "
+            "contents away and lay down a fresh set. So a destination that already exists is LEFT "
+            "ALONE and reported as a failure for that machine -- the default can never destroy "
+            "anything. --force is the only way through, and it deletes everything that was in "
+            "there including a participant's work, so it stops and makes you type "
+            "'yes, I understand' in full first. There is no flag that skips that prompt and it "
+            "cannot run unattended. The destination DIRECTORY itself is kept and refilled rather "
+            "than deleted and recreated, so a participant's open shell sitting in it survives and "
+            "any ownership or mode set on it by hand is not quietly reset. Use the 'sync' verb "
+            "for OUR repo, which stays a real checkout and can be fast-forwarded."
         ),
     )
     sync_participants.add_argument(
         "--force",
         action="store_true",
-        help="replace the destination if it already exists, deleting whatever is in it (including a participant's work); asks you to confirm in full first",
+        help="refill the destination if it already exists, deleting whatever is in it (including a participant's work); asks you to confirm in full first",
     )
     sync_participants.set_defaults(func=cmd_sync_participants)
 

@@ -533,11 +533,6 @@ CE marked: 80447146, passthrough: 0 (100% marked)
 **You just programmed the Bluefield to rewrite packet headers in hardware**, at line rate, with your
 program running on the Arm cores doing nothing but printing the counter once a second.
 
-<!-- > **Seeing the bit itself.** The counter proves packets went through your marking pipe, not that
-> the byte on the wire changed. Ask an organiser if you want to watch that directly: we have a
-> version of this program that also mirrors the traffic into a capture file, in hardware and at no
-> cost to throughput, and `tcpdump` then shows the marked packets as `tos 0x3,CE`. -->
-
 ## D.3 — Mark only some packets
 
 We will now create Figure 3's `RANDOM_SAMPLE` pipe by implementing `create_sampling_pipe()`
