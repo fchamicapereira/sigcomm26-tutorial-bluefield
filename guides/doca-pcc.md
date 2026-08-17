@@ -54,7 +54,7 @@ $ cat /opt/mellanox/doca/applications/VERSION
 ```
 
 Only the first number matters: **`2.x` → use `doca-2`**, **`3.x` → use `doca-3`**. The
-exercises are identical in the two versions, down to the same three TODOs, differing only in a
+exercises are identical in the two versions, down to the same two TODOs, differing only in a
 few DOCA calls renamed between the generations, which are already written for you in each tree.
 
 **Move into your version's directory now, and stay there for the rest of Part 2:**
@@ -89,27 +89,29 @@ hands that event straight to your algorithm — `rtt_template_algo()`, in `devic
   `device/algo/rtt_template.c`. Currently it has no effect (it keeps the current
   rate of the sender unchanged).
 - A **"TX" event** is triggered when a batch of packets is sent.
-  This triggers the call of the function `rtt_template_handle_roce_tx()` in 
+  This triggers the call of the function `rtt_template_handle_roce_tx()` in
   `device/algo/rtt_template.c`. Currently it also leaves the sender's rate unchanged.
-  
-> **INFO** — the NIC batches events for you. At line rate the DPA could never keep up with
+
+> **INFO — the NIC batches events for you.** At line rate the DPA could never keep up with
 > one event per packet, so the hardware coalesces them: one event stands for many packets.
 > It reacts per batch, while the hardware rate limiter does the per-packet work.
 
 ![The path a CNP takes to the handler you write. The dark path is the one traced here; the pale branches are where the other events land. Whichever handler runs, it writes `results->rate`.](../docs/pcc-event-dispatch.png){ width=80% }
 
-Let's build and run the PCC program in its current state. 
+Let's build and run the PCC program in its current state.
 
-> **NOTE** If we ran this application as is it would alter the sender's rate based on CNPs received.
+> **NOTE — it does not react yet.** If we ran this application as it is, it would **not** alter the
+> sender's rate based on the CNPs received: both reactions are still empty, and you write them in
+> Step 3.
 
 <div class="tryit">
 **Try it yourself! Build the application and run.**
 
-We use `meson` and `ninja` to setup and build our applications. All three
-commands run from inside the version directory you moved into in Step 1:
+We use `meson` and `ninja` to setup and build our applications. Both
+commands run from inside the version directory you moved into in Step 2:
 
 ```bash
-# Setting up the build directory 
+# Setting up the build directory
 # Unlike Part 1, we need to run this every time we edit the code.
 $ meson setup --reconfigure build
 
@@ -137,12 +139,12 @@ $ sudo ./build/doca-flow/doca_flow_ecn -- --percent 100
 ```bash
 # Run the pcc application
 # Sender is on PF1 so we need to run the PCC application on the sender's uplink (mlx5_1)
-$ sudo stdbuf -oL  ./build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50
+$ sudo stdbuf -oL ./build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50
 ```
 
-**What you should see.** 
+**What you should see.**
 
-By looking at the output of the DOCA Flow application you should see that every packet is having its CE bit set, and from the PCC output you should see that the congestion notifications are being received: 
+By looking at the output of the DOCA Flow application you should see that every packet is having its CE bit set, and from the PCC output you should see that the congestion notifications are being received:
 
 ```bash
 PURE_ECN cnp=1    rate=1048576
@@ -158,7 +160,8 @@ However by looking at the `benchmark.sh` output you *don't* see the performance 
 
 # Step 3 — Implementing the custom CC algorithm on the DPA
 
-The custom CC algorithm has 2 main components (`TODO 1` and `TODO 2` on the `device/algo/rtt_template.c` file) that you need to implement:
+The custom CC algorithm has 2 main components, `TODO 1` and `TODO 2`, both in `rtt_template.c`.
+You need to implement:
 
 - **A multiplicative decrease** reaction to congestion signals, so the sender decreases its rate when congestion is detected.
 - **An additive increase** reaction to the absence of congestion signals, so the sender increases its rate when no congestion is detected.
@@ -177,7 +180,7 @@ We will now go over the details of each of these components and how to implement
 > ```c
 > //×0.90 per CNP; 800..995 = ×0.80..×0.995
 > //`900` means ×0.90. Make it smaller and each CNP cuts harder; larger and it barely reacts.
-> #define ECN_CNP_DEC_FACTOR (((1 << 16) * 900) / 1000)  
+> #define ECN_CNP_DEC_FACTOR (((1 << 16) * 900) / 1000)
 > ```
 
 
@@ -194,7 +197,9 @@ suddenly plummeted when the congestion signals arrived.
 **drift back up** gently so that we don't cause congestion again. Implement this logic in the function `rtt_template_handle_roce_tx()`:
 
 - Keep a global counter (that persists across calls) so you act only every ~1000th call rather than on every single send event;
-- Increment the sender's rate by `AI >> 2`. `AI` is a predefined constant (in `device/algo/rtt_template_algo_params.h`) equal to 5% of line rate, so `AI >> 2` — a quarter of it — adds a gentle ~1.25% each time;
+- Increment the sender's rate by `AI >> 2`. `AI` is a predefined constant equal to 5% of line rate —
+  it lives in `rtt_template_algo_params.h`, beside the file you are editing — so `AI >> 2`, a quarter
+  of it, adds a gentle ~1.25% each time;
 - Prevent the rate from exceeding `RATE_MAX`.
 
 <div class="tryit">
@@ -266,7 +271,8 @@ keeps up at line rate.
 
 **Why the rate collapses so hard at `--percent 100`.** Marking *every* packet makes the receiver send
 a constant stream of CNPs, so the controller thinks the link is maximally congested and keeps cutting.
-A smaller fraction (`--percent 50`) is a gentler, more realistic signal.
+A much smaller fraction — the `--percent 0.1` and `--percent 0.01` you try in Step 3 — is a gentler,
+more realistic signal.
 
 **Rate set-point vs measured goodput.** The rate is a *set-point*; the throughput you actually get
 also depends on queueing and retransmissions. A controller can hold a similar average rate yet deliver

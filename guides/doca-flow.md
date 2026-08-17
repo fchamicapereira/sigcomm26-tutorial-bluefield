@@ -4,10 +4,9 @@ subtitle: "Programming the Data Plane with DOCA Flow"
 ---
 
 In this part you program the **data plane** of a BlueField-3: you tell the NIC what to do with
-packets *in its own hardware, at line rate*, before any CPU sees them. In this part of the tutorial, 
-you will write a program that marks live RoCE traffic with an ECN congestion signal. Later,
-on the second part of the tutorial, you will build a congestion controller on the Bluefield that
-reacts to those same signals.
+packets *in its own hardware, at line rate*, before any CPU sees them. You will write a program that
+marks live RoCE traffic with an ECN congestion signal. Later, in the second part of the tutorial, you
+will build a congestion controller on the Bluefield that reacts to those same signals.
 
 # Step 1 — The card, and getting traffic onto it
 
@@ -23,7 +22,7 @@ namespace so the kernel cannot short-circuit them locally:
 > the two of them as the *endpoints* of a network flow — so a single card can play both "sender" and
 > "receiver" across the cable.
 
-The client sends RDMA WRITEs over `p1`, and are later received by `p0` and ultimately fed to the server.
+The client sends RDMA WRITEs over `p1`, which are later received on `p0` and ultimately fed to the server.
 
 What you will be reproducing is an everyday situation in a datacenter network: a sender is going as fast
 as it can, the network becomes congested, a switch on the path signals that congestion by setting
@@ -100,9 +99,9 @@ Open **two terminals**, both on the Arm cores.
 sudo ip netns exec ns0 ib_write_bw -d mlx5_2 -R -x 1 -F --report_gbits
 ```
 
-> **INFO - what the flags mean:** `ip netns exec ns0` runs it inside the `ns0` sandbox; `-d mlx5_2` uses that
+> **INFO — what the flags mean:** `ip netns exec ns0` runs it inside the `ns0` sandbox; `-d mlx5_2` uses that
 > namespace's RDMA device; `-R` sets the connection up via the RDMA connection manager (keep this on —
-> Part II needs it); `-x 1` picks the RoCEv2 address; `-F` ignores a CPU-frequency warning;
+> Part 2 needs it); `-x 1` picks the RoCEv2 address; `-F` ignores a CPU-frequency warning;
 > `--report_gbits` prints the result in gigabits/second. It prints its settings and then says it is
 > **waiting for a client**.
 
@@ -197,8 +196,8 @@ In this part of the tutorial, you will be editing the `doca-flow/doca_flow_ecn.c
 Everything in `doca-flow/doca_flow_ecn.c` is done except for three function bodies, marked
 `TODO 1` to `TODO 3`. The program already forwards traffic as shipped.
 
-Laid out logically, the `doca_flow_ecn.c` file is logically separated into four different phases.
-We use python-like pseudo-code to show you these logical components:
+The `doca_flow_ecn.c` file is laid out in four phases. We use python-like pseudo-code to show you
+these logical components:
 
 ```python
 def doca_flow_ecn_main():
@@ -206,7 +205,7 @@ def doca_flow_ecn_main():
     setup_logging()
     parse_args()                        # --percent
 
-    # Phase 2: bring-up the device and library. None of this is pipeline work
+    # Phase 2: bring up the device and library. None of this is pipeline work
     dev = open_and_probe_dev(0)         # PF0, probed into DPDK with its SF representor
     configure_and_start_dpdk_port(dev)  # packet buffer pool, RX/TX queues
     initialize_doca_flow()              # switch mode, hardware steering, counters
@@ -216,7 +215,7 @@ def doca_flow_ecn_main():
     # Phase 3: actually program the DOCA Flow pipeline
     build_pipeline(port, cfg, out)      # <-- **all** of your work will be here
 
-    # Phase 4: runtime logic (just reporting) and teardwown
+    # Phase 4: runtime logic (just reporting) and teardown
     run_report_loop()                   # print the counters, once a second
     teardown()
 ```
@@ -296,11 +295,11 @@ EAL: Probe PCI driver: mlx5_pci (15b3:a2dc) device: 0000:03:00.0 (socket -1)
 ```
 
 Currently, the pipeline is pre-configured with a root pipe that simply forwards packets from the wire
-straight to the server, and performing no additional operation. This pipe is created in the function
+straight to the server, and performs no additional operation. This pipe is created in the function
 `create_root_pipe_nop()`.
 
 **Now stop it with Ctrl-C, leaving the traffic (`benchmark.sh`) running.** Throughput carries on unchanged, aside from
-a small dip in throughput as the card falls back to its default OVS forwarding. Start the program again
+a small dip as the card falls back to its default OVS forwarding. Start the program again
 and it takes over (notice again the small temporary dip in throughput).
 
 > **Why this matters.** The instant a DOCA Flow program starts, it **owns the NIC's switch**, and from
@@ -328,7 +327,7 @@ So the one idiom behind every pipe: **the pipe says *which* fields, the entry sa
 and the same split applies to actions (the pipe declares "entries may rewrite this field," the entry
 supplies the value to write).
 
-You are not writing from a blank page. Take heavy inspirations from `create_root_pipe_nop()` directly
+You are not writing from a blank page. Take heavy inspiration from `create_root_pipe_nop()` directly
 above `create_root_pipe()`, because you are writing almost the same pipe:
 
 - **(TODO 1a) Match** on the ingress port, `match.parser_meta`, with a full mask so it is compared exactly. This is
@@ -357,8 +356,8 @@ Uncomment the rest of the block in `build_pipeline()`, then fill in `create_forw
 `TODO 2a` and `TODO 2b`.
 
 **This one function builds both of the forwarding pipes.** `build_pipeline()` calls it **twice**:
-once to build a pipe that does *not* mark the packets' ECN bits ("PASS" in Figure 3), and another
-to build a pipe that does mark them ("MARK" in Figure 3).
+once to build a pipe that does *not* mark the packets' ECN bits ("PASS" in Figure 3), and once to
+build a pipe that does mark them ("MARK" in Figure 3).
 Everything the two have in common — the match, the counter, the forwards — you write unconditionally.
 The two steps that are specific to the marking pipe are the action template in `TODO 2a` and the value
 the entry writes in `TODO 2b`.
@@ -610,9 +609,9 @@ field types in* `doca_flow_net.h`. *Every call is documented there. This is only
 matter here.*
 
 `grep -n 'dscp_ecn\|parser_meta' /opt/mellanox/doca/include/doca_flow*.h` answers most structural
-questions faster than the web documentation. If you are on VS Code Remote-SSH,
-`.vscode/c_cpp_properties.json` already points IntelliSense at these paths, so "go to definition"
-works.
+questions faster than the web documentation. In the browser editor, the **clangd** extension is
+already pointed at these headers by the repository's `.clangd` file, so completion and "go to
+definition" work on the DOCA types without any setup.
 
 | Call                                     | What it is for                                                  |
 | ---------------------------------------- | --------------------------------------------------------------- |
