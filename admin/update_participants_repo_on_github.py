@@ -23,11 +23,10 @@ say) are left alone.
 
 Layout it produces:
 
-    doca-2/                       flow exercise (from doca_flow_template.c) + pcc exercise (from
-                                  doca-pcc-ecn/device/algo/rtt_template_exercise.c)
-    doca-3/                       ditto for the DOCA 3 tree (pcc only if it has a template)
-    *.pdf                         the rendered guides, at the ROOT (see GUIDES): tailscale,
-                                  doca-flow (Part I) and doca-pcc (Part II)
+    doca-2/                       flow exercise + PCC exercise + path steering
+    doca-3/                       flow exercise + PCC exercise + path steering
+    *.md, *.pdf                   every guide source and rendered guide, at the repository root
+    images/                       shared images referenced by the Markdown guides
     scripts/                      run_server.sh, run_client.sh, benchmark.sh
     .vscode/                      IntelliSense paths for the DOCA/DPDK headers on the card
     .clang-format
@@ -73,43 +72,24 @@ VERSIONS = ["doca-2", "doca-3"]
 # from this list on every run, which is what removes it from an existing checkout.
 SCRIPTS = ["run_server.sh", "run_client.sh", "benchmark.sh"]
 
-# Rendered guides to hand over, by filename in guides/. The .md sources, template.tex, the logos
-# and the figures stay here -- participants get the PDF and nothing else, which is why this is a
-# list of built artefacts rather than a directory copy. Run `make -C guides` first: this script
-# does NOT build them, and copying a stale PDF is silent.
-#
-# They land at the ROOT of the participant repo, not in a guides/ subdirectory: a participant who
-# has just cloned should see the thing they are meant to read without opening a folder first.
-# "guides" stays in MANAGED so an earlier checkout's guides/ directory is deleted rather than left
-# behind holding stale copies.
-#
-# Both hands-on parts now ship as rendered PDFs. doca-pcc.pdf replaced tutorial-doca-pcc.md, which
-# was the Part II guide in Markdown; see TUTORIAL_GUIDES below for what that cost and what it buys.
-GUIDES = ["tailscale.pdf", "doca-flow.pdf", "doca-pcc.pdf"]
+# Publish every guide source and its same-named rendered PDF. Deriving the list from the
+# Markdown sources means a new guide automatically makes its PDF mandatory. Run
+# `make -C guides` first; this script validates but does not build PDFs.
+GUIDE_DIR = REPO / "guides"
+GUIDE_MARKDOWN = sorted(path.name for path in GUIDE_DIR.glob("*.md"))
+GUIDE_PDFS = [pathlib.Path(name).with_suffix(".pdf").name for name in GUIDE_MARKDOWN]
+
+# Maintainer-oriented or stale project documentation. Participants receive the dedicated guide;
+# the buildable sources and solution-to-DIY patch remain intact.
+PATH_STEERING_SKIP = {"README.md", "steering/README.md"}
 
 # Participant-only files kept here as real files rather than generated inline, so they can be
 # reviewed and edited directly. Mapped to their destination in the participant repo.
 ASSETS = {"participants/c_cpp_properties.json": ".vscode/c_cpp_properties.json"}
 
-# Hands-on guides shipped as raw GitHub-flavoured Markdown rather than as a rendered PDF. EMPTY
-# NOW, and kept because the machinery is the only record of the trade-off.
-#
-# Both parts used to ship differently: Part I as doca-flow.pdf, Part II as tutorial-doca-pcc.md.
-# Markdown buys collapsible <details> blocks and doca-2/... links that resolve on GitHub; a PDF
-# buys real figures, page numbers, and one consistent artefact per part. Part II is now
-# guides/doca-pcc.md -> doca-pcc.pdf, so both parts match and neither depends on GitHub's renderer.
-#
-# tutorial-doca-flow.md was never here: it is an earlier draft of the Part I guide describing an
-# exercise that no longer exists -- four TODOs, mirroring, --pcap, Stage 1/Stage 2. Both
-# tutorial-*.md files stay in this repo and are listed in OBSOLETE so existing checkouts lose them.
-#
-# Anything added back here must be written against the names a participant actually sees: the flow
-# program is doca_flow_ecn.c over there, not doca_flow_template.c.
-TUTORIAL_GUIDES = []
-
 # Top-level directories this script owns: deleted and rewritten on every run. Anything else in the
 # participant repo survives.
-MANAGED = list(VERSIONS) + ["scripts", ".vscode"]
+MANAGED = list(VERSIONS) + ["scripts", ".vscode", "images"]
 MANAGED_FILES = [".clang-format"]
 
 # Paths this script USED to write and now deletes on sight. Without this they would sit in every
@@ -262,6 +242,18 @@ def copy(src, dst, changes, dry_run):
     shutil.copy2(src, dst)
 
 
+def copy_tree(src, dst, changes, dry_run, skip=frozenset()):
+    """Copy regular files below src, optionally excluding relative POSIX paths."""
+    src = src.resolve()
+    if not src.is_dir():
+        sys.exit(f"required source directory is missing: {src}")
+    for path in sorted(candidate for candidate in src.rglob("*") if candidate.is_file()):
+        rel = path.relative_to(src)
+        if rel.as_posix() in skip:
+            continue
+        copy(path, dst / rel, changes, dry_run)
+
+
 def render_guide(text):
     """Prepare a tutorial guide for participants: drop the HTML author-comments, which are notes to
     ourselves and are marked 'delete before publishing'."""
@@ -294,6 +286,12 @@ def build_version(dest, version, changes, dry_run):
 
     if include_pcc:
         build_pcc(dest, version, changes, dry_run)
+
+    # doca-2 uses a symlink to the shared implementation here. Resolve it and copy ordinary
+    # files so each participant version tree is self-contained. Keep it out of the common
+    # app_list: path steering does not target DOCA 2.7.
+    copy_tree(src / "pcc-path-steering", out / "pcc-path-steering", changes, dry_run,
+              PATH_STEERING_SKIP)
 
 
 def ensure_checkout(dest, dry_run):
@@ -346,11 +344,15 @@ def main():
     for version in VERSIONS:
         build_version(dest, version, changes, args.dry_run)
 
-    for guide in GUIDES:
-        src = REPO / "guides" / guide
+    for guide in GUIDE_MARKDOWN:
+        src = GUIDE_DIR / guide
+        write(dest / guide, render_guide(src.read_text()), changes, args.dry_run)
+    for guide in GUIDE_PDFS:
+        src = GUIDE_DIR / guide
         if not src.exists():
             sys.exit(f"guides/{guide} has not been built -- run: make -C guides")
         copy(src, dest / guide, changes, args.dry_run)
+    copy_tree(GUIDE_DIR / "images", dest / "images", changes, args.dry_run)
     for script in SCRIPTS:
         src = REPO / script
         dst = dest / "scripts" / script
@@ -361,8 +363,6 @@ def main():
         copy(REPO / name, dest / name, changes, args.dry_run)
     for src_rel, dst_rel in ASSETS.items():
         copy(REPO / "admin" / src_rel, dest / dst_rel, changes, args.dry_run)
-    for guide in TUTORIAL_GUIDES:
-        write(dest / guide, render_guide((REPO / guide).read_text()), changes, args.dry_run)
 
     for kind, path in changes:
         print(f"  {kind:6} {path.relative_to(dest)}")
