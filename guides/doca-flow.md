@@ -120,10 +120,11 @@ the card's line rate:
 
 </details>
 
-To avoid retyping the flags, the repo wraps these as scripts: `./scripts/run_server.sh` and
-`./scripts/run_client.sh` (one per terminal), or **`./scripts/benchmark.sh`**, which starts both
-ends together in a single command and streams the sender's throughput (Ctrl-C stops both). We
-recommend using `benchmark.sh` from Step 3 onwards.
+To avoid retyping the flags, the repo wraps these as scripts, in `scripts/` at the top of the
+repository: `run_server.sh` and `run_client.sh` (one per terminal), or **`benchmark.sh`**, which
+starts both ends together in a single command and streams the sender's throughput (Ctrl-C stops
+both). We recommend using `benchmark.sh` from Step 3 onwards, where it is reached as
+`../scripts/benchmark.sh`.
 
 # Step 2 — Understanding DOCA Flow
 
@@ -170,8 +171,7 @@ ships with a root pipe that forwards packets to the server; the exercise is to p
 # Step 3 — Build the pipeline
 
 The repository (`/home/s26t/sigcomm26-tutorial-bluefield-participants`) has one directory per DOCA release:
-`doca-2` and `doca-3`. Pick the relevant one for your chosen Bluefield. In this part of the tutorial, you
-will be editing the `doca-flow/doca_flow_ecn.c` file.
+`doca-2` and `doca-3`. Pick the relevant one for your chosen Bluefield.
 
 **Which of the two is yours?** Run this command to find out which version of DOCA is installed on your card:
 
@@ -183,8 +183,17 @@ $ cat /opt/mellanox/doca/applications/VERSION
 Only the first number matters: **`2.x` → use `doca-2`**, **`3.x` → use `doca-3`**. The
 exercises are identical in the two versions, down to the same three TODOs, differing only in a
 few DOCA calls renamed between the generations, which are already written for you in each tree.
-Every command below says `doca-2`; substitute with `doca-3` throughout if that is what you have.
 
+**Move into your version's directory now, and stay there for the rest of Part 1:**
+
+```bash
+$ cd ~/sigcomm26-tutorial-bluefield-participants/doca-2   # or doca-3
+```
+
+This is the only place the version is ever named. Every command from here on is written relative to
+that directory, so you can paste them as they are whichever card you are on.
+
+In this part of the tutorial, you will be editing the `doca-flow/doca_flow_ecn.c` file.
 Everything in `doca-flow/doca_flow_ecn.c` is done except for three function bodies, marked
 `TODO 1` to `TODO 3`. The program already forwards traffic as shipped.
 
@@ -233,18 +242,18 @@ stays in the pipeline either way: it is where `MARK` and `PASS` send anything th
 # Step 4 — The actual tutorial exercise
 
 We use `meson` and `ninja` to setup and build our applications. You only need to setup once, but
-you do need to recompile with `ninja` every time you make changes to your program. Remember,
-replace `doca-2` with `doca-3` if you are using a Bluefield equipped with DOCA version 3.x.
+you do need to recompile with `ninja` every time you make changes to your program. All three
+commands run from inside the version directory you moved into in Step 3:
 
 ```bash
 # Setting up the build directory (only once)
-$ meson setup doca-2/build doca-2
+$ meson setup build
 
 # Compile the application
-$ ninja -C doca-2/build
+$ ninja -C build
 
 # Run the doca flow application
-$ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 100
+$ sudo ./build/doca-flow/doca_flow_ecn -- --percent 100
 ```
 
 > **The `--` matters.** Everything before it goes to the DPDK library; everything after it is for
@@ -253,7 +262,7 @@ $ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 100
 
 <div class="tryit">
 
-**Keep `./scripts/benchmark.sh` running in a second shell** throughout. It starts the server and the
+**Keep `../scripts/benchmark.sh` running in a second shell** throughout. It starts the server and the
 client together and streams the sender's throughput, so you can see the effect of every change.
 
 </div>
@@ -270,7 +279,7 @@ the server straight out to the wire.
 the card — and the counter line should stay at zero:
 
 ```bash
-s26t@bluefield-lisbon-1:~/sigcomm26-tutorial-bluefield-participants$ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 100
+s26t@bluefield-lisbon-1:~/sigcomm26-tutorial-bluefield-participants/doca-2$ sudo ./build/doca-flow/doca_flow_ecn -- --percent 100
 EAL: Detected CPU lcores: 16
 EAL: Detected NUMA nodes: 1
 EAL: Detected shared linkage of DPDK
@@ -393,7 +402,7 @@ under `mask`, which has already been computed for you as a power of two minus on
 actions, no counter, no forward of its own.
 
 ```bash
-$ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 12.5
+$ sudo ./build/doca-flow/doca_flow_ecn -- --percent 12.5
 ```
 
 The startup banner prints the fraction actually achieved, rounded down to a power of two. Check it
@@ -403,8 +412,6 @@ against the counter line, which now has traffic on both sides:
 CE marked: 39273726, passthrough: 274903125 (12.5% marked)
 CE marked: 40684757, passthrough: 284794849 (12.5% marked)
 ```
-
-Try `--percent 25` and `--percent 10` and watch the split follow.
 
 ## Checking your work
 
