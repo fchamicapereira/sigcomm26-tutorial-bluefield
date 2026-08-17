@@ -1,133 +1,7 @@
 ---
-title: "Part 1 — Programming the data plane with DOCA Flow"
+title: "Part 1 — Mark ECN"
+subtitle: "Programming the data plane with DOCA Flow"
 ---
-
-<!--
-  ================================================================================================
-  FOURTH DRAFT. Notes for us, not for participants. Last worked on: 2026-08-16.
-  ================================================================================================
-
-  Written against a 30-MINUTE hands-on budget, with everything conceptual demoted to appendices
-  that say plainly they can be skipped. Measured 2026-08-16: 3,900 words on the critical path
-  (intro through "What you built"), 5,850 with the appendices; 14 pages, of which the appendices
-  are the last five. Roughly the same as the draft before this rewrite -- the three-exercise Part D
-  costs more words than the old TODO list, and dropping the capture path pays for it. Re-measure if
-  you edit, and do not let the body grow: 3,900 words is already ~20 minutes of reading.
-
-  WHAT PART D ACTUALLY IS, AND WHY THE FILES ARE SHAPED THIS WAY
-
-  Three exercises, one function each: D.1 the root pipe, D.2 the marking pipe, D.3 the sampler.
-  Every one of them ends in something visible -- line rate, then a climbing counter, then a split
-  counter -- so nobody spends the session staring at a program that does nothing.
-
-  The template SHIPS AS A WORKING FORWARDER. build_pipeline() calls create_root_pipe_nop(), a
-  complete root pipe given to them, and everything else is commented out. So the first thing a
-  participant does is run a program that works, and the "your program owns the eSwitch" lesson
-  lands by taking that away rather than by starting from a dead link.
-
-  create_root_pipe_nop() is deliberately 90% of the answer to D.1: the two differ only in the wire
-  entry's forward, FWD_PORT vs FWD_PIPE. That is the point -- "the only difference between a
-  forwarder and a pipeline is where the root sends wire traffic" -- and it makes the first exercise
-  one nobody can fail in a timed session.
-
-  THERE IS NO CAPTURE PATH IN THE EXERCISE. Three programs per tree now:
-
-    doca_flow_ecn_pcap.c   marking + a hardware copy to a pcap (2.x mirror / 3.x flooding pipe).
-                           Hand-maintained, ours. D.2 offers it as something an organiser can show.
-    doca_flow_solution.c   the same without any of that. THE answer key, and the source
-                           regen_templates.py derives from.
-    doca_flow_template.c   generated. Do not hand-edit.
-
-  NO SOLUTIONS SHIP TO PARTICIPANTS. update_participants_repo_on_github.py copies the template
-  only -- there are no
-  doca-N-solutions/ directories, and neither doca_flow_solution.c nor doca_flow_ecn_pcap.c goes
-  over (the pcap one contains the same three answers). Same for PCC's rtt_template.c. So the guide
-  must never tell a participant to diff against a solution: "Checking your work" now points at the
-  counters instead, and D.2's capture step is an ask-an-organiser rather than a command. If we
-  decide to publish solutions after the session, that section is what changes.
-
-  Dropping the mirror is what makes create_forward_to_sf_pipe identical on 2.x and 3.x: with it,
-  the 3.x hit forward is a nine-line FWD_HASH_PIPE branch and the 2.x one is a single line.
-
-  In the participant repo the template is called doca_flow_ecn.c, in doca-N/ --
-  update_participants_repo_on_github.py renames it. Every command in this guide runs from the top
-  of the repository; keep it that way (`ninja -C doca-2/build`, not `cd doca-2 && ninja -C build`),
-  because ./scripts/ does not exist one level down.
-
-  FORM CHOICES, kept on purpose:
-    PYTHON PSEUDO-CODE for main(), because the reader is navigating, not typing.
-    PROSE ONLY for build_pipeline(): it used to be pasted here as a C block, which meant
-    re-syncing the guide by hand every time regen_templates.py changed it, and it went stale
-    twice. The file itself is the copy that matters -- describe it here, do not duplicate it.
-    A TABLE for the six pipeline functions, marking given vs TODO.
-    AN ENUMERATED LIST for the five-part pipe shape (end of Part B) -- deliberately not a code
-    block: the logical components are the API calls, and the structs are merely their arguments.
-
-  DO NOT use <details>/<summary> here, however well they read in tutorial-doca-flow.md: pandoc's
-  LaTeX writer DROPS raw HTML silently, so those blocks would vanish from the PDF with no warning.
-  Blockquotes are the portable substitute, and are what the callouts use.
-
-  The guides Makefile warns if xelatex drops a glyph (Inconsolata has no box-drawing, arrows or
-  superscripts). Keep diagrams as real figures, not ASCII art. `make -C guides check` also catches
-  overfull lines, which pandoc never reports.
-
-  STILL OPEN -- all of it needs a card
-
-  0. DONE 2026-08-17. WALKED END TO END on bf3-ulisbon-1 (DOCA 2.9), from ssh to --percent 0, out
-     of a freshly synced participant repo. Every TODO was solved from its own numbered recipe
-     WITHOUT consulting the solution -- so the recipes are sufficient, which is the property that
-     matters in a timed session. Results: as-shipped 92.60 Gb/s with counters at 0; D.1 the same
-     through PORT_DEMUX; D.2 100% marked at line rate; D.3 split at 50/25/6.25/0. Ctrl-C-and-
-     restart behaves as D.1 describes. benchmark.sh needed ZERO restarts across the whole walk.
-     doca-3 is COMPILE-ONLY (bf3-uwashington-1, 3.1): both template and solution build clean with
-     the same five warnings, but nothing has been RUN on a 3.x card. Do that before the session.
-  1. DONE 2026-08-17. Part A's results table, D.1's whole startup block, and the D.2/D.3 counter
-     lines are now real pastes from that walk. The D.1 block's line numbers (213/693/383/401) are
-     the generated template's -- they move whenever regen_templates.py changes it, so re-paste
-     rather than hand-patching if the file is regenerated.
-  2. DONE 2026-08-17. Confirmed FIVE, exactly as promised, and they clear 5 -> 3 -> 0 across
-     D.1 and D.2. meson's default warning_level=1 gives -Wall; the exercise target adds
-     -Wno-unused-variable (see doca-flow/meson.build) so the ~20 unused-variable warnings from the
-     scaffolded structs stay out of the way.
-  3. DONE. ttyplot is installed system-wide on all twelve (fleet.py deps --install), so PATH
-     resolution wins and the repo-local fallback never runs. benchmark.sh also now supervises both
-     ib_write_bw ends and restarts them when a half-written pipeline kills the client -- which it
-     does permanently, RC retry-exceeded, with the server left unusable too. Without that, "keep
-     benchmark.sh running throughout" was false for most of Part D.
-  4. VERIFIED ON HARDWARE 2026-08-16, all twelve cards, via a read-only probe over fleet.py.
-     The loopback IS already set up everywhere (ns0 + ns1 present), so Part A is right that
-     participants never run setup_roce_loopback.sh.
-     The device names in Part A were WRONG before that probe and are now real pastes. What was
-     wrong: enp3s0f0s0 / enp3s0f1s0 / mlx5_2 / mlx5_3 are correct names but exist ONLY INSIDE
-     ns0 and ns1, and the guide had participants running `ip -br link show` and `rdma link show`
-     in the default namespace, where none of them appear. In the default namespace the SFs show
-     up switchdev-style as en3f0pf0sf0 / en3f1pf1sf0, and `rdma link show` lists only mlx5_0 and
-     mlx5_1 with dozens of mostly-DOWN ports.
-     Every command block in Part A's device section was then re-run VERBATIM on all twelve and the
-     output checked against it. The two `rdma link show` lines are byte-identical on 12/12.
-     The blocks are ANNOTATED on purpose, so they are not literal pastes: the trailing `# ...`
-     comments explain each line and the column padding is ours. The p0/p1 MACs are one card's and
-     are flagged as such. Keep it that way -- readable beats verbatim here -- but do not let the
-     SUBSTANCE drift from what the cards print.
-     An `ip -br addr show` block showing the SF netdevs and their 10.0.0.x addresses was cut: the
-     netdev names enp3s0f0s0 / enp3s0f1s0 are never typed into anything in this tutorial (every
-     command names mlx5_2/mlx5_3, ns0/ns1, or 10.0.0.1), and the endpoint table at the top of
-     Part A already carries the addresses. They survive only in the `rdma link show` netdev column
-     and in Appendix A's function table.
-     Uniform across the fleet: p0, p1, pf0hpf, pf1hpf, en3f0pf0sf0, en3f1pf1sf0, ovsbr1, ovsbr2,
-     ovs-system, oob_net0, tmfifo_net0, tailscale0 on 12/12; en3f0pf0sf4 (ns0_1, 10.0.0.11) on
-     11/12 -- not bf3-umich-2; docker0 on 2/12. Inside ns0/ns1 every card is identical.
-     Hostnames vary and mean nothing (bluefield-lisbon-1, bluefield-2, dpu, umich-bluefield3,
-     localhost.localdomain, ...) -- go by the Tailscale name.
-  5. THE HOST/DOCA TABLE at the top is transcribed from admin/results/*.print_doca_version.log --
-     the last fleet-wide run of print_doca_version.sh, which reported pkg-config as the source on
-     all twelve. Re-run `admin/fleet.py` and re-transcribe if a card is reimaged or added; the
-     hostnames themselves match admin/machines.txt and the `tailscale status` listing in
-     guides/tailscale.md, so those three have to be changed together.
-     Note the password is printed in this PDF, matching what guides/tailscale.md already does.
-  6. Nobody has walked the exercise using this guide, and nobody has timed it. The 30-minute claim
-     is a design target, not a measurement. Time it on one card before the session.
--->
 
 In this part you program the **data plane** of a BlueField-3: you tell the NIC what to do with
 packets *in its own hardware, at line rate*, before any CPU sees them. In this part of the tutorial, 
@@ -135,51 +9,7 @@ you will write a program that marks live RoCE traffic with an ECN congestion sig
 on the second part of the tutorial, you will build a congestion controller on the Bluefield that
 reacts to those same signals.
 
-# The cards, and how to reach them
-
-Twelve BlueField-3 cards are available, in racks at four universities and NVIDIA. They are not on
-the public internet: you reach them over the tutorial's Tailscale network, which you joined with the
-pre-tutorial guide (`tailscale.pdf`). If `tailscale status` lists the hosts below, you are ready.
-
-The cards do not all run the same DOCA release, and that decides which directory you work in for
-the rest of this guide. You may pick one of the available Bluefields:
-
-| Host                | DOCA | You work in |
-| ------------------- | ---- | ----------- |
-| `bf3-nvidia-1`      | 2.7  | `doca-2/`   |
-| `bf3-nvidia-2`      | 2.7  | `doca-2/`   |
-| `bf3-nvidia-3`      | 2.7  | `doca-2/`   |
-| `bf3-nvidia-4`      | 2.7  | `doca-2/`   |
-| `bf3-ulisbon-1`     | 2.9  | `doca-2/`   |
-| `bf3-ulisbon-2`     | 2.9  | `doca-2/`   |
-| `bf3-ulisbon-3`     | 2.9  | `doca-2/`   |
-| `bf3-umich-1`       | 2.9  | `doca-2/`   |
-| `bf3-umich-2`       | 2.9  | `doca-2/`   |
-| `bf3-uwashington-1` | 3.1  | `doca-3/`   |
-| `bf3-uwashington-2` | 3.1  | `doca-3/`   |
-| `bf3-uwaterloo-1`   | 3.4  | `doca-3/`   |
-
-Every command in this guide is written for `doca-2`. Replace with `doca-3` throughout if that is your
-release. The few places the two genuinely differ are marked **[2.x]** and **[3.x]**, and everything
-unmarked applies to both.
-
-Every card takes the same shared account, and `ssh` by hostname works once you are on the tailnet:
-
-| **User** | **Password**        |
-| -------- | ------------------- |
-| `s26t`   | `sigcomm26tutorial` |
-
-```bash
-$ ssh s26t@bf3-ulisbon-1
-```
-
-> **Prerequisites.** That `ssh` puts you on the **Arm cores** of the BlueField-3 — a normal Ubuntu
-> shell that happens to run inside the NIC. You have `sudo` permissions. You will be working on
-> `/home/s26t/sigcomm26-tutorial-bluefield-participants` throughout the tutorial.
-> **Every command below is typed on the Arm cores**. The host the card is plugged into
-> is never involved.
-
-# Part A — The card, and getting traffic onto it
+# Step 1 — The card, and getting traffic onto it
 
 Your card has **two ports reachable to each other (`p0` and `p1`)**, so whatever leaves `p1` arrives at `p0`,
 and vice versa.
@@ -239,7 +69,7 @@ link mlx5_3/1 state ACTIVE physical_state LINK_UP netdev enp3s0f1s0   # the clie
 > the switch's own view, not the endpoints'. `mlx5_2` and `mlx5_3` are the names you want, and
 > `ip netns exec` is what makes them visible.
 
-**Step 1: wire up the two endpoints**.
+**Step 1.1: wire up the two endpoints**.
 The two ports are wired into a loopback and split into two isolated network sandboxes (Linux
 network namespaces) called `ns0` and `ns1`, one SF in each, each with its own IP address
 (`mlx5_2` → `ns0` → `10.0.0.1`, `mlx5_3` → `ns1` → `10.0.0.2`). This is already set up for you on
@@ -255,7 +85,7 @@ the tutorial card, so *there's nothing to run here*.
 > is what makes them behave like two separate hosts even though they live on the same card. You run a
 > command "inside" a namespace with `ip netns exec <name> <command>`.
 
-**Step 2: put real traffic on the loopback.**
+**Step 1.2: put real traffic on the loopback.**
 We generate traffic with `ib_write_bw` — a standard RoCE benchmarking tool (from the `perftest`
 package) that measures how fast one endpoint can write data to another. It needs a server
 (receiver) and a client (sender).
@@ -269,7 +99,6 @@ Open **two terminals**, both on the Arm cores.
 sudo ip netns exec ns0 ib_write_bw -d mlx5_2 -R -x 1 -F --report_gbits
 ```
 
-<!-- FIXME: I don't quite understand the explanation for -R and -x. [-R] what does it mean to set a connection up via the RDMA connection manager?; [-x] what RoCEv2 address? what would happen if we didn't provide -x? And why is the -x argument followed by "1"? -->
 > **INFO - what the flags mean:** `ip netns exec ns0` runs it inside the `ns0` sandbox; `-d mlx5_2` uses that
 > namespace's RDMA device; `-R` sets the connection up via the RDMA connection manager (keep this on —
 > Part II needs it); `-x 1` picks the RoCEv2 address; `-F` ignores a CPU-frequency warning;
@@ -290,9 +119,9 @@ the card's line rate:
 To avoid retyping the flags, the repo wraps these as scripts: `./scripts/run_server.sh` and
 `./scripts/run_client.sh` (one per terminal), or **`./scripts/benchmark.sh`**, which starts both
 ends together in a single command and streams the sender's throughput (Ctrl-C stops both). We
-recommend using `benchmark.sh` from Part C onwards.
+recommend using `benchmark.sh` from Step 3 onwards.
 
-# Part B — Understanding DOCA Flow
+# Step 2 — Understanding DOCA Flow
 
 Interacting with a BlueField-3 typically entails interfacing with — and often independently
 programming — four different architectural components:
@@ -330,12 +159,11 @@ compare it". The **entry** you add afterwards supplies the value really compared
 installs no rule in the hardware; adding an entry does. The same split applies to actions — the
 pipe declares "entries may rewrite this field", the entry says "…to this value".
 
-<!-- FIXME: do we actually ship the template with a root pipe that forwards packets to the server, and the exercise is to put our own pipeline in between? I thought we shipped a NOP pipe, that is, just forwards the packets (not particularly to the server, but actually both ways). Also, are they supposed to write their pipeline in between? I thought they were supposed to replace this with their own. -->
 - **One pipe is the root.** Every packet entering the eSwitch starts its lookup at the pipe marked
 `is_root`. No packet reaches other pipes unless the root sends it there. The program you are given
 ships with a root pipe that forwards packets to the server; the exercise is to put your own pipeline in between.
 
-# Part C — Build the pipeline
+# Step 3 — Build the pipeline
 
 The repository (`/home/s26t/sigcomm26-tutorial-bluefield-participants`) has one directory per DOCA release:
 `doca-2` and `doca-3`. Pick the relevant one for your chosen Bluefield. In this part of the tutorial, you
@@ -382,11 +210,11 @@ functions at the bottom of the file:
 
 `build_pipeline()` is the one to read closely: it is the whole exercise in a single function, and
 it ships wired as a plain forwarder. In this function, note what `wire_target` does: it starts out
-as `PASSTHROUGH` — a working forwarder on its own, and all D.1 needs — and is then reassigned to
+as `PASSTHROUGH` — a working forwarder on its own, and all Step 4.1 needs — and is then reassigned to
 whichever pipe wire traffic should really enter as you add the pipes in front of it. `PASSTHROUGH`
 stays in the pipeline either way: it is where `MARK` and `PASS` send anything they do not match.
 
-# Part D — The actual tutorial exercise
+# Step 4 — The actual tutorial exercise
 
 We use `meson` and `ninja` to setup and build our applications. You only need to setup once, but
 you do need to recompile with `ninja` every time you make changes to your program. Remember,
@@ -414,9 +242,9 @@ client together and streams the sender's throughput, so you can see the effect o
 it is labelled with. Not drawn: `PORT_DEMUX`'s second entry, sending everything coming back from
 the server straight out to the wire.
 
-![The Part D pipeline. Solid arrows are where a packet goes when it matches, dashed ones where it goes when it does not.](../docs/tutorial-flow-pipeline.png){ width=92% }
+![The Step 4 pipeline. Solid arrows are where a packet goes when it matches, dashed ones where it goes when it does not.](../docs/tutorial-flow-pipeline.png){ width=92% }
 
-## D.1 — Write the root pipe (`PORT_DEMUX`)
+## Step 4.1 — Write the root pipe (`PORT_DEMUX`)
 
 **First, run it exactly as it comes.** Traffic should sit at line rate — 92 or 184 Gb/s depending on
 the card — and the counter line should stay at zero:
@@ -442,7 +270,7 @@ Currently, the pipeline is pre-configured with a root pipe that simply forwards 
 straight to the server, and performing no additional operation. This pipe is created in the function
 `create_root_pipe_nop()`.
 
-**Now stop it with Ctrl-C, leaving the traffic running.** Throughput carries on unchanged, aside from
+**Now stop it with Ctrl-C, leaving the traffic (`benchmark.sh`) running.** Throughput carries on unchanged, aside from
 a small dip in throughput as the card falls back to its default OVS forwarding. Start the program again
 and it takes over (notice again the small temporary dip in throughput).
 
@@ -494,7 +322,7 @@ would corrupt the very feedback you are trying to create.
 Rebuild and run. Traffic should be back at line rate, now through your pipe rather than the shipped
 one, with the counters still at zero — `wire_target` is `PASSTHROUGH`, which counts nothing.
 
-## D.2 — Mark every packet
+## Step 4.2 — Mark every packet
 
 Uncomment the rest of the block in `build_pipeline()`, then fill in `create_forward_to_sf_pipe()` —
 `TODO 2a` and `TODO 2b`.
@@ -510,7 +338,7 @@ Take inspiration from `create_passthrough_pipe()`, right above `create_forward_t
 this is essentially the same pipe but with a counter and an action added.
 
 - **Match** any IPv4 packet *whatever ECN bits it arrived with*, using the wildcard idiom from
-  Part B: `outer.ip4.dscp_ecn` as `0xFF` in the pipe's match, `0x00` in the mask. Reset that byte to
+  Step 2: `outer.ip4.dscp_ecn` as `0xFF` in the pipe's match, `0x00` in the mask. Reset that byte to
   `0x00` before adding the entry — the same struct is reused as the entry's values.
 - **A counter**, via `monitor.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED`. Without it the
   `CE marked:` line stays at zero and you cannot tell whether anything works.
@@ -533,7 +361,7 @@ CE marked: 80447146, passthrough: 0 (100% marked)
 **You just programmed the Bluefield to rewrite packet headers in hardware**, at line rate, with your
 program running on the Arm cores doing nothing but printing the counter once a second.
 
-## D.3 — Mark only some packets
+## Step 4.3 — Mark only some packets
 
 We will now create Figure 3's `RANDOM_SAMPLE` pipe by implementing `create_sampling_pipe()`
 (`TODO 3a` and `TODO 3b`), which splits traffic across pipes probabilistically in hardware.
@@ -545,15 +373,15 @@ under `mask`, which has already been computed for you as a power of two minus on
 actions, no counter, no forward of its own.
 
 ```bash
-$ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 50
+$ sudo ./doca-2/build/doca-flow/doca_flow_ecn -- --percent 12.5
 ```
 
 The startup banner prints the fraction actually achieved, rounded down to a power of two. Check it
 against the counter line, which now has traffic on both sides:
 
 ```
-CE marked: 31745931, passthrough: 31745054 (50% marked)
-CE marked: 37396355, passthrough: 37398022 (50% marked)
+CE marked: 39273726, passthrough: 274903125 (12.5% marked)
+CE marked: 40684757, passthrough: 284794849 (12.5% marked)
 ```
 
 Try `--percent 25` and `--percent 10` and watch the split follow.
@@ -561,8 +389,8 @@ Try `--percent 25` and `--percent 10` and watch the split follow.
 ## Checking your work
 
 There is no answer key in your checkout, and you do not need one: the program tells you where you
-stand at every step. Traffic back at line rate ends D.1, `CE marked:` climbing ends D.2, and the two
-counters splitting in the ratio you asked for ends D.3. When one of those does not happen, the
+stand at every step. Traffic back at line rate ends Step 4.1, `CE marked:` climbing ends Step 4.2, and the two
+counters splitting in the ratio you asked for ends Step 4.3. When one of those does not happen, the
 debugging tips below name the usual cause.
 
 Ask an organiser if you are stuck. That is what we are here for.
@@ -572,7 +400,7 @@ Ask an organiser if you are stuck. That is what we are here for.
 - **Read the *last* error line, not the first.** A failed pipe prints a wall of internal DOCA errors.
   The final `[CRT]...[doca_check] <name>: <reason>` line names the pipe, and that name is the
   function to open.
-- **Nothing forwards at all** — expected in the middle of D.1, once the no-op call is commented out
+- **Nothing forwards at all** — expected in the middle of Step 4.1, once the no-op call is commented out
   and `create_root_pipe()` is still empty. If it persists, check that `doca_flow_pipe_create()` ran
   and that `doca_flow_entries_process()` accounted for both entries.
 - **Traffic stops the moment you uncomment the rest of the block** — a forward points at a pipe that
@@ -582,14 +410,14 @@ Ask an organiser if you are stuck. That is what we are here for.
   root pipe is still aimed at `PASSTHROUGH` rather than at the marking pipe.
 - **The client connects and then stalls** — the root pipe's second entry, server SF back out to the
   wire, is missing or points the wrong way. RoCE needs both directions.
-- **A pipe fails to install** — check the status after `doca_flow_entries_process()`, per step 5 of
-  the shape in Part B. Success from the add-entry call alone proves nothing.
+- **A pipe fails to install** — check the status after `doca_flow_entries_process()`, per the
+  pipe-and-entry idiom in Step 4.1. Success from the add-entry call alone proves nothing.
 - **`EAL initialization failed`, then `argp: doca_argp_start(...)`** — a copy of the program is
   already running, and only one DOCA Flow program can own the switch at a time. This is the one
   case where the last line misleads: it blames `argp`, but nothing is wrong with your arguments.
   Stop the other instance; if it was killed hard, `sudo pkill -f doca_flow`.
 - **`defined but not used` warnings** — that is the list of functions you have not wired up yet.
-  Expect five before you start; they clear as you uncomment in D.1 and D.2.
+  Expect five before you start; they clear as you uncomment in Step 4.1 and Step 4.2.
 
 # What you built
 
@@ -694,7 +522,7 @@ side it raises an event on the DPA, where the Part 2 algorithm sets a new send r
 
 # Appendix B — DOCA Flow concepts in full
 
-*Reference material. Part B has the working subset.*
+*Reference material. Step 2 has the working subset.*
 
 **Port.** A DOCA Flow handle on one vport. In *switch mode* the PF uplink is also the **proxy port**
 (switch-manager port): it must be started first, and every pipe belongs to it — even pipes that

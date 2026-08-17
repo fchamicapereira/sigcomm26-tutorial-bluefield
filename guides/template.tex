@@ -298,10 +298,20 @@ $endif$
   % two are in different families, because Libertine at a given size looks larger than Biolinum.
   {\sffamily\bfseries\Huge $title$\par}
 
+$if(subtitle)$
+  \vspace{3pt}
+  % The guide's own second clause -- what it is actually about, where the title is only a part
+  % number. Sans like the title, because acmart keeps title and subtitle in the same family, but
+  % \Large\mdseries rather than \Huge\bfseries so it reads as a continuation of the line above
+  % instead of a second title. Optional: a guide without one (tailscale) simply skips it.
+  {\sffamily\Large $subtitle$\par}
+$endif$
+
   \vspace{5pt}
   % Not acmart's \LARGE subtitle: this line carries the whole tutorial name rather than a short
   % second clause, so at \LARGE it wraps and competes with the title. \normalsize keeps it clearly
-  % subordinate while staying readable under a \Huge line.
+  % subordinate while staying readable under a \Huge line. (The guide's OWN subtitle is the block
+  % above; this is the series it belongs to.)
   {\itshape\normalsize $tutorial-title$\par}
   {\footnotesize\color{muted} $conference$\par}
 

@@ -1,8 +1,8 @@
-/* The pipeline a participant builds in Part D of the DOCA Flow guide, and nothing else.
+/* The pipeline a participant builds in Step 4 of the DOCA Flow guide, and nothing else.
  *
  * Deliberately minimal: pipe names, the direction of traffic, and which section builds each one.
  * No vports, no domains, no API calls, no run-time branching on --percent. It sits immediately
- * before D.1 so the reader can see the shape of the finished thing before writing any of it, and
+ * before Step 4.1 so the reader can see the shape of the finished thing before writing any of it, and
  * every box in it is either a function they write or the one worked example they are given.
  *
  * NOT the same figure as pf0-eswitch-pipes.dot, which is the full eSwitch view including the
@@ -16,7 +16,7 @@
  * push the figure past what fits at page width; on the same rank the two miss edges simply drop
  * down to it.
  *
- * Drawn in the --percent-between-0-and-100 shape, the one D.3 ends at: RANDOM_SAMPLE present, both
+ * Drawn in the --percent-between-0-and-100 shape, the one Step 4.3 ends at: RANDOM_SAMPLE present, both
  * MARK and PASS built. At 0 or 100 the wire feeds one of them directly and RANDOM_SAMPLE does not
  * exist, which the guide says in prose rather than drawing three variants here.
  */
@@ -40,7 +40,7 @@ digraph tutorial_flow_pipeline {
   /* Endpoints and the drop, drawn as bare text so only the pipes read as boxes.
    *
    * The ingress names the PEER, not just the port. Labelled "wire (p0)" it kept prompting "so what
-   * happens to the traffic from p1?" -- Part A has just established that the client is the thing on
+   * happens to the traffic from p1?" -- Step 1 has just established that the client is the thing on
    * p1, and p0 does not obviously read as "the client's packets, one cable-hop later". PF1 has its
    * own eSwitch domain, which this program never touches; its traffic reaches PF0 as p0 ingress and
    * that is the only way in. Naming both ports here answers the question inside the figure. */
@@ -53,13 +53,13 @@ digraph tutorial_flow_pipeline {
   node [shape=box, style="rounded,filled", color="#7f9db9", penwidth=1.0,
         height=0.34, margin="0.14,0.07", fillcolor="#dce9f6"];
   /* Two-row TABLE labels, not name<BR/>tag: with <BR/> the underscore in PORT_DEMUX and
-   * RANDOM_SAMPLE descends onto the line below and strikes through the D.n. */
-  demux  [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD>PORT_DEMUX</TD></TR><TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">D.1</FONT></TD></TR></TABLE>>];
-  sample [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD>RANDOM_SAMPLE</TD></TR><TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">D.3</FONT></TD></TR></TABLE>>];
-  mark   [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD>MARK</TD></TR><TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">D.2</FONT></TD></TR></TABLE>>];
-  pass   [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD>PASS</TD></TR><TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">D.2</FONT></TD></TR></TABLE>>];
+   * RANDOM_SAMPLE descends onto the line below and strikes through the step tag. */
+  demux  [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD>PORT_DEMUX</TD></TR><TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">Step 4.1</FONT></TD></TR></TABLE>>];
+  sample [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD>RANDOM_SAMPLE</TD></TR><TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">Step 4.3</FONT></TD></TR></TABLE>>];
+  mark   [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD>MARK</TD></TR><TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">Step 4.2</FONT></TD></TR></TABLE>>];
+  pass   [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD>PASS</TD></TR><TR><TD><FONT POINT-SIZE="8" COLOR="#5a7fa6">Step 4.2</FONT></TD></TR></TABLE>>];
 
-  /* Grey: given to you, not written in any section -- hence no D.n tag and a single-row label. */
+  /* Grey: given to you, not written in any section -- hence no step tag and a single-row label. */
   pt     [label="PASSTHROUGH", color="#a8a8a8", fillcolor="#ededed"];
 
   /* Wire ingress: the path the exercise is about. */

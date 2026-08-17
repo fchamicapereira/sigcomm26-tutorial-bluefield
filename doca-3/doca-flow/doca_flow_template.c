@@ -446,7 +446,7 @@ static void run_report_loop(const struct pipeline *pl) {
 // transparent than the no-op it replaces, and a RoCE connection established while the pipeline is
 // live needs its ARP to get through.
 //
-// build_pipeline() aims the root pipe here in D.1, before there is anything else to aim it at.
+// build_pipeline() aims the root pipe here in Step 4.1, before there is anything else to aim it at.
 static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *port) {
   struct doca_flow_pipe_cfg *cfg;
 
@@ -653,7 +653,7 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
 // difference between a forwarder and a pipeline.
 //
 // build_pipeline() below calls exactly one of the two roots: this one in the exercise as shipped,
-// and create_root_pipe() once Part D.1 is done. __attribute__((unused)) is there because whichever
+// and create_root_pipe() once Step 4.1 is done. __attribute__((unused)) is there because whichever
 // of those two states you are in leaves the other function uncalled, and -Wall would say so.
 static void __attribute__((unused)) create_root_pipe_nop(struct doca_flow_port *port) {
   struct doca_flow_pipe_cfg *cfg;
@@ -797,7 +797,7 @@ static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe 
 // directly, with no sampling stage to pay for).
 static void build_pipeline(struct doca_flow_port *port, const struct app_config *cfg,
                            struct pipeline *out) {
-  // ---------------- NO-OP CONFIGURATION: comment out this line in D.1. -------------------------
+  // ---------------- NO-OP CONFIGURATION: comment out this line in Step 4.1. --------------------
   // As shipped this line IS the whole pipeline: one root pipe moving packets between the wire and
   // the receiver SF, so the program runs at line rate with nothing marked and nothing counted.
   // Until you uncomment the block below, the compiler reports the functions it would have called
@@ -805,8 +805,8 @@ static void build_pipeline(struct doca_flow_port *port, const struct app_config 
   create_root_pipe_nop(port);
 
   // ---------------- YOUR PIPELINE ---------------------------------------------------------------
-  // D.1: uncomment the two lines tagged [1] at the end.
-  // D.2 and D.3: uncomment the rest of the block as well.
+  // Step 4.1: uncomment the two lines tagged [1] at the end.
+  // Step 4.2 and Step 4.3: uncomment the rest of the block as well.
   //
   // struct doca_flow_pipe *wire_target = create_passthrough_pipe(port);  // [1]
   //

@@ -422,7 +422,7 @@ static void run_report_loop(const struct pipeline *pl) {
 // transparent than the no-op it replaces, and a RoCE connection established while the pipeline is
 // live needs its ARP to get through.
 //
-// build_pipeline() aims the root pipe here in D.1, before there is anything else to aim it at.
+// build_pipeline() aims the root pipe here in Step 4.1, before there is anything else to aim it at.
 static struct doca_flow_pipe *create_passthrough_pipe(struct doca_flow_port *port) {
   struct doca_flow_pipe_cfg *cfg;
 
@@ -514,6 +514,28 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
   struct doca_flow_fwd fwd_miss = {0};
   struct doca_flow_pipe *pipe = NULL;
 
+  // TODO 2a -- build the pipe. In order:
+  //   1. the match, any IPv4 packet whatever its ECN bits:
+  //        match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+  //        match.outer.ip4.dscp_ecn = 0xFF;        -- the byte participates...
+  //        match_mask.outer.ip4.dscp_ecn = 0x00;   -- ...but is not compared
+  //        doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask)
+  //   2. the action, ONLY when `mark` is true:
+  //        action_template.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+  //        action_template.outer.ip4.dscp_ecn = 0xFF;   -- entries may rewrite this byte
+  //        doca_flow_pipe_cfg_set_actions(cfg, action_templates, NULL, NULL, 1)
+  //   3. the counter, which is what the CE marked: report reads:
+  //        monitor.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;
+  //        doca_flow_pipe_cfg_set_monitor(cfg, &monitor)
+  //   4. the forwards -- a hit goes to the SF, a miss carries on into miss_pipe
+  //      (PASSTHROUGH), which forwards everything, so nothing is dropped here:
+  //        fwd_hit.type = DOCA_FLOW_FWD_PORT;   fwd_hit.port_id = SF_REP_PORT_ID;
+  //        fwd_miss.type = DOCA_FLOW_FWD_PIPE;  fwd_miss.next_pipe = miss_pipe;
+  //        -- a miss forward may only be a pipe or a drop. DOCA_FLOW_FWD_PORT is
+  //           rejected here with "invalid fwd_miss type 2".
+  //   5. doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe)
+  // Wrap each call in DOCA_CHECK(name, ...).
+
   match.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
   match.outer.ip4.dscp_ecn = 0xFF;
   match_mask.outer.ip4.dscp_ecn = 0x00;
@@ -541,12 +563,26 @@ static struct doca_flow_pipe *create_forward_to_sf_pipe(struct doca_flow_port *p
   // pipe_create() has read the whole cfg and the pipe keeps no reference to it.
   doca_flow_pipe_cfg_destroy(cfg);
 
-  // What the template above allowed to be written, written: 0x03 is both ECN bits set, CE
-  // ("Congestion Experienced"), the mark the PCC exercise in Part IV reacts to. action_idx picks
-  // which of the cfg's action templates this fills in — there is only one, at index 0.
   struct doca_flow_actions entry_actions = {0};
   struct entry_batch_status install_status = {0};
 
+  // TODO 2b -- add the one entry and install it. In order:
+  //   1. the value to write, ONLY when `mark` is true:
+  //      entry_actions.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
+  //      entry_actions.outer.ip4.dscp_ecn = 0x03;   -- both ECN bits set: CE
+  //      entry_actions.action_idx = 0;
+  //   2. match.outer.ip4.dscp_ecn = 0x00;   -- `match` is reused as this entry's values,
+  //                                            so drop the 0xFF placeholder from step 1 above
+  //   3. doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match,
+  //                               mark ? &entry_actions : NULL, &monitor, NULL,
+  //                               DOCA_FLOW_NO_WAIT, &install_status, out_entry)
+  //      -- out_entry, not &entry: the counter report queries the entry you hand back
+  //   4. doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries)
+  //   5. fail unless install_status.failure is false and .nb_processed == nb_entries
+
+  // What the template above allowed to be written, written: 0x03 is both ECN bits set, CE
+  // ("Congestion Experienced"), the mark the PCC exercise in Part IV reacts to. action_idx picks
+  // which of the cfg's action templates this fills in — there is only one, at index 0.
   if (mark) {
     entry_actions.action_idx = 0;
     entry_actions.outer.l3_type = DOCA_FLOW_L3_TYPE_IP4;
@@ -606,6 +642,18 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
   struct doca_flow_fwd fwd_miss = {0};
   struct doca_flow_pipe *pipe = NULL;
 
+  // TODO 3a -- build the pipe. In order:
+  //   1. match.parser_meta.random = 0;
+  //   2. match_mask.parser_meta.random = mask;   -- `mask` is a power of two minus one,
+  //                                                 so this hits 1 packet in (mask + 1)
+  //   3. doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask)
+  //   4. fwd_hit.type = DOCA_FLOW_FWD_PIPE;   fwd_hit.next_pipe = hit;
+  //      fwd_miss.type = DOCA_FLOW_FWD_PIPE;  fwd_miss.next_pipe = miss;
+  //      -- both are pipes, and both go on to the receiver; a miss here means
+  //         `not selected for marking', not an error
+  //   5. doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe)
+  // Wrap each call in DOCA_CHECK("RANDOM_SAMPLE", ...).
+
   match.parser_meta.random = 0;
   match_mask.parser_meta.random = mask;
   DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
@@ -622,6 +670,12 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
   // both outcomes are decided by the pipe's own two forwards.
   struct entry_batch_status install_status = {0};
   struct doca_flow_pipe_entry *entry;
+
+  // TODO 3b -- add the one entry and install it. In order:
+  //   1. doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match, NULL, NULL, NULL,
+  //                               DOCA_FLOW_NO_WAIT, &install_status, &entry)
+  //   2. doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries)
+  //   3. fail unless install_status.failure is false and .nb_processed == nb_entries
 
   DOCA_CHECK("RANDOM_SAMPLE", doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &match, NULL, NULL, NULL,
                                                        DOCA_FLOW_NO_WAIT, &install_status, &entry));
@@ -650,7 +704,7 @@ static struct doca_flow_pipe *create_sampling_pipe(struct doca_flow_port *port,
 // difference between a forwarder and a pipeline.
 //
 // build_pipeline() below calls exactly one of the two roots: this one in the exercise as shipped,
-// and create_root_pipe() once Part D.1 is done. __attribute__((unused)) is there because whichever
+// and create_root_pipe() once Step 4.1 is done. __attribute__((unused)) is there because whichever
 // of those two states you are in leaves the other function uncalled, and -Wall would say so.
 static void __attribute__((unused)) create_root_pipe_nop(struct doca_flow_port *port) {
   struct doca_flow_pipe_cfg *cfg;
@@ -749,6 +803,16 @@ static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe 
   struct doca_flow_fwd fwd_miss = {0};
   struct doca_flow_pipe *pipe = NULL;
 
+  // TODO 1a -- build the pipe. In order:
+  //   1. match.parser_meta.port_meta = 0xFFFFFFFF;       -- this field participates
+  //   2. match_mask.parser_meta.port_meta = 0xFFFFFFFF;  -- and is compared exactly
+  //   3. doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask)
+  //   4. fwd_hit.type = DOCA_FLOW_FWD_CHANGEABLE     -- each entry names its own target
+  //   5. fwd_miss.type = DOCA_FLOW_FWD_DROP
+  //   6. doca_flow_pipe_create(cfg, &fwd_hit, &fwd_miss, &pipe)
+  // Wrap each call in DOCA_CHECK("PORT_DEMUX", ...). create_root_pipe_nop() above builds
+  // exactly this pipe -- the two differ only in one entry, in 1b.
+
   match.parser_meta.port_meta = 0xFFFFFFFF;
   match_mask.parser_meta.port_meta = 0xFFFFFFFF;
   DOCA_CHECK("PORT_DEMUX", doca_flow_pipe_cfg_set_match(cfg, &match, &match_mask));
@@ -763,6 +827,23 @@ static void create_root_pipe(struct doca_flow_port *port, struct doca_flow_pipe 
   struct doca_flow_pipe_entry *entry;
   struct doca_flow_match entry_match = {0};
   struct doca_flow_fwd entry_fwd = {0};
+
+  // TODO 1b -- add one entry per direction, then install both. In order:
+  //   1. from the wire, on into your marking chain:
+  //        entry_match.parser_meta.port_meta = PF_PORT_ID;
+  //        entry_fwd.type = DOCA_FLOW_FWD_PIPE;
+  //        entry_fwd.next_pipe = wire_target;   <-- a PIPE, not a port. THIS is the one
+  //                                                 line that differs from the no-op.
+  //        doca_flow_pipe_add_entry(PIPE_QUEUE, pipe, &entry_match, NULL, NULL, &entry_fwd,
+  //                                 DOCA_FLOW_WAIT_FOR_BATCH, &install_status, &entry)
+  //   2. back from the receiver SF, straight out of the uplink:
+  //        entry_match.parser_meta.port_meta = SF_REP_PORT_ID;
+  //        memset(&entry_fwd, 0, sizeof(entry_fwd));   -- reused, so clear it first
+  //        entry_fwd.type = DOCA_FLOW_FWD_PORT;
+  //        entry_fwd.port_id = PF_PORT_ID;
+  //        the same add-entry call, but with DOCA_FLOW_NO_WAIT
+  //   3. doca_flow_entries_process(port, PIPE_QUEUE, ENTRY_PROCESS_TIMEOUT_US, nb_entries)
+  //   4. fail unless install_status.failure is false and .nb_processed == nb_entries
 
   // From the wire: on to the head of the marking chain. WAIT_FOR_BATCH holds this entry back so it
   // reaches the hardware together with the one below.

@@ -169,12 +169,12 @@ eSwitch → receiver. If you see a table with a real number, Part A is done.
 **DOCA Flow** is how you program that eSwitch fast path in C. Your program builds a small graph of
 **pipes**. Think of each pipe as one rule with four parts:
 
-| part | the question it answers | example |
-| --- | --- | --- |
-| **match** | *which* packets does this pipe act on? | "all IPv4 packets" |
-| **count** | *how many* packets hit it? | a hardware counter you can read |
-| **actions** | *what* to change in the packet? | rewrite a header field (or nothing) |
-| **forward** | *where* does the packet go next? | another pipe, a port, the CPU, or drop |
+| part        | the question it answers                | example                                |
+| ----------- | -------------------------------------- | -------------------------------------- |
+| **match**   | *which* packets does this pipe act on? | "all IPv4 packets"                     |
+| **count**   | *how many* packets hit it?             | a hardware counter you can read        |
+| **actions** | *what* to change in the packet?        | rewrite a header field (or nothing)    |
+| **forward** | *where* does the packet go next?       | another pipe, a port, the CPU, or drop |
 
 You describe these rules once; the NIC then applies them to every packet in hardware. That's the
 whole idea: **match → count → modify → forward.**
@@ -365,7 +365,7 @@ forwarder** — the same no-op program you ran in Part B. Everything hard and un
 the device, parsing arguments, the loop that writes a capture file, the counter report — is already
 written and you do not touch it. To turn it into an ECN marker you **flip `build_pipeline()` from its
 no-op wiring to the ECN pipeline** (comment one line, uncomment a block) and fill in **three** short
-functions, marked `TODO 1`–`TODO 3`.
+functions, marked `TODO 1--3`.
 
 #### The structure of `doca_flow_ecn_pcap.c`
 
