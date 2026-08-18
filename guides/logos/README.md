@@ -1,15 +1,16 @@
 # Institution logos
 
 One file per `id` in `../tutorial.json`. The guides build without them — a missing logo renders as
-a small framed box naming the file that is wanted, visible in the PDF — so this directory can be
-filled in gradually. Those placeholders should not survive to publication.
+a small framed box naming the file that is wanted, visible in the PDF — so this directory could be
+filled in gradually. **All six are now present and checked in**, so no placeholder should appear in
+any rendered guide; if one does, the file below it is missing or misnamed.
 
 | File | Institution |
 |---|---|
 | `inesc-id.pdf` | INESC-ID, Instituto Superior Técnico, University of Lisbon |
 | `michigan.pdf` | University of Michigan |
 | `waterloo.pdf` | University of Waterloo |
-| `nvidia.pdf` | NVIDIA |
+| `nvidia.png` | NVIDIA — the only raster one; see [Format](#format) |
 | `purdue.pdf` | Purdue University |
 | `washington.pdf` | University of Washington |
 
@@ -17,8 +18,9 @@ filled in gradually. Those placeholders should not survive to publication.
 
 **`.pdf` is strongly preferred, `.png` works.** The template tries `.pdf` first, then `.png`, then
 gives up and draws the placeholder. Logos are set inline at about 2.1ex — roughly the height of a
-capital letter — so a vector PDF stays crisp at any zoom while a small raster goes soft. If all you
-can get is SVG, convert it once:
+capital letter — so a vector PDF stays crisp at any zoom while a small raster goes soft. Five of the
+six here are PDFs; `nvidia.png` is the exception, and is the one to replace first if a vector version
+becomes available. If all you can get is SVG, convert it once:
 
 ```bash
 # rsvg-convert (brew install librsvg) — or Inkscape: inkscape in.svg --export-filename=out.pdf

@@ -1,5 +1,9 @@
 # DOCA Flow two-path RoCE steering
 
+The DOCA Flow half of the path-steering bonus exercise. Read
+[`../README.md`](../README.md) first for how it connects to PCC, and
+[`guides/pcc-path-steering.md`](../../../guides/pcc-path-steering.md) for the participant walkthrough.
+
 This module implements the DOCA Flow datapath for a two-path PCC experiment on
 a BlueField-3 eSwitch. Egress assigns every RoCEv2 packet to virtual path 0 or
 1. The path is carried in IP ToS bit `0x04` (DSCP bit 0), which is outside the
@@ -97,10 +101,11 @@ virtual-path traffic rather than only packets eligible for a path's ECN marker.
 
 ## Build
 
-The root Meson project builds the standalone binary and links the same steering
-library into `doca_pcc`:
+The Meson project one level up (`doca-3/pcc-path-steering/`, **not** `doca-3/`) builds the standalone
+binary and links this same steering library into `doca_pcc`:
 
 ```bash
+cd doca-3/pcc-path-steering
 meson setup build
 ninja -C build
 ```
@@ -152,11 +157,12 @@ version-specific backends:
   full rewrite action as required by the 2.9 entry-update API. The 3.x native RANDOM HASH plus
   metadata-dispatch implementation remains unchanged.
 - QP1 observation uses shared mirror resources 1 (wire ingress) and 2 (SF egress), plus one DPDK RX queue. The
-  public 2.9 Flow API cannot match BTH destination QPN, so the first-pass
-  backend mirrors all IPv4 UDP/4791 packets and rejects non-QP1 packets in the
-  software parser. This is functionally correct but may be expensive at line
-  rate; hardware validation should measure RX clone load before considering a
-  direct `rte_flow` IB-BTH rule.
+  public 2.9 Flow API cannot match BTH destination QPN, so this backend mirrors
+  all IPv4 UDP/4791 packets and rejects non-QP1 packets in the software parser.
+  That is functionally correct and was validated on hardware, but it is a known
+  cost: every RoCE packet is cloned to the RX queue rather than just QP1's.
+  Anyone pushing this to line rate should measure the RX clone load, and would
+  likely want a direct `rte_flow` IB-BTH rule instead.
   The shared mirror targets a fixed-size, bidirectional BASIC pipe, which then
   forwards to DPDK RSS queue 0; switch-mode mirrors cannot target RSS directly
   or target a resizable/non-bidirectional pipe. Packet registers are not

@@ -49,7 +49,14 @@ Part of the `doca-flow` meson build (links `libpcap`):
 cd doca-3 && meson setup build && ninja -C build   # produces build/doca-flow/doca_flow_ecn_pcap
 ```
 
-Needs `libpcap-dev` (the [`Dockerfile`](../Dockerfile) installs it for the container build).
+Needs `libpcap-dev`. `meson.build` declares it `required : true`, so a box without it fails at
+configure time for the *whole* `doca-3` project, not just this target;
+[`admin/local_scripts/install_deps.sh`](../../admin/local_scripts/install_deps.sh) installs it.
+
+> Note that [`doca-3/Dockerfile`](../Dockerfile) does **not** apt-install `libpcap-dev`, unlike
+> [`doca-2/Dockerfile`](../../doca-2/Dockerfile) which does. The 3.x container build therefore depends
+> on the `doca:devel-3.4.0` base image already carrying it. If `./run_container.sh 3` ever fails at
+> `meson setup` with a missing `pcap`, that is the cause — add it to the `apt-get install` list.
 
 ## Run
 

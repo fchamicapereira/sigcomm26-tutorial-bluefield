@@ -1,5 +1,21 @@
 # PCC path steering
 
+The tutorial's **bonus exercise**: closing a loop between the two programming models the earlier parts
+introduced, by feeding DOCA PCC's per-QP congestion signal into a live DOCA Flow dispatch table. The
+participant-facing walkthrough is
+**[`guides/pcc-path-steering.md`](../../guides/pcc-path-steering.md)**; this file and
+[`steering/README.md`](steering/README.md) are the implementation notes.
+
+**Orientation.** This tree is a copy of NVIDIA's `applications` tree with our steering module added,
+so it is a **separate meson project** from `doca-3/meson.build` — configure it from this directory,
+not from `doca-3/` (see [Build](#build)). `doca-2/pcc-path-steering` is a **symlink** to this
+directory: one tree serves both DOCA generations, with the version differences handled internally by
+`steering/doca_flow_compat.h` and `steering/pcc_doca_compat.h` rather than by a second copy.
+`solution-to-diy.patch` converts the finished sources into the numbered TODO stubs the guide walks
+through, and `VERSION` is the vendor tree's own version file, which `meson.build` expects to find.
+
+## What it does
+
 This PCC application reports per-flow rate information from the DPA to the host
 through the PCC trace stream. The custom RTT-template / Pure-ECN algorithm keeps
 calculating its congestion-derived per-QP rate, but that value is a steering
@@ -97,25 +113,39 @@ The trace route has been validated end to end:
 3. The host decodes QPN and FXP20 rate correctly.
 4. The host aggregates reports and prints per-QPN averages once per second.
 
-## Current limitation: DPA report volume
+## Known limitation: DPA report volume
 
-The current startup-detection experiment uses reserved RTT-template context words to tag the QPN that owns a cloned context. PCC context cloning/sharing can cause the tag to alternate between active QPNs. In a multi-flow run this currently causes a format-6 report and a startup flush on many TX events, yielding high report rates (for example, about 129k reports in one host summary interval).
+**This is the state the exercise shipped in and was frozen in — it is a caveat, not a to-do.**
 
-This behavior is useful for validating the trace transport and host aggregation, but it is **not** the intended production stream rate. The next DPA-side refinement should reduce reporting to:
+The startup-detection scheme uses reserved RTT-template context words to tag the QPN that owns a
+cloned context. PCC context cloning/sharing can cause the tag to alternate between active QPNs. In a
+multi-flow run this causes a format-6 report and a startup flush on many TX events, yielding high
+report rates (for example, about 129k reports in one host summary interval).
+
+That is fine for the demo — it is more than enough to validate the trace transport and the host
+aggregation, and the steering loop works at this rate — but it is **not** what a production stream
+should look like. Anyone building on this should reduce reporting to:
 
 1. one initial report per real flow; and
 2. one report for each actual PCC rate change.
 
-Do not flush on every TX or every rate report in the production path: `doca_pcc_dev_trace_flush()` is intended to flush partial trace buffers and frequent calls can reduce DPA performance.
+and in particular should **not** flush on every TX or every rate report:
+`doca_pcc_dev_trace_flush()` is intended to flush *partial* trace buffers, and frequent calls reduce
+DPA performance.
 
 ## Build
 
-Build both host and DPA code:
+This directory is its own meson project. Build both host and DPA code **from here**:
 
 ```bash
+cd doca-3/pcc-path-steering
 meson setup build
 ninja -C build
+# => build/doca_pcc         the PCC controller, with embedded egress steering behind -r
+# => build/doca_flow_steer  the standalone steering datapath (either role)
 ```
+
+`ninja -C build doca_flow_steer` rebuilds just the standalone binary.
 
 The DPA archive is a Ninja custom target. Changes to the device C sources,
 headers, attributes YAML, or `build_device_code.sh` automatically rerun
@@ -155,9 +185,9 @@ once per second and feeds the same steering API. `steer_poll()` applies the calc
 > RoCEv2 UDP port breaks ICRC and drops rewritten traffic. See
 > [`steering/README.md`](steering/README.md).
 
-> **Status.** The standalone ingress and embedded PCC egress paths are
-> hardware-validated on DOCA 2.9, 3.1, and 3.4; DOCA 2.7 is not supported yet.
-> On 2.9, embedded steering reuses
+> **Status (final).** The standalone ingress and embedded PCC egress paths are
+> hardware-validated on DOCA 2.9, 3.1, and 3.4. **DOCA 2.7 is not supported**, and — the tutorial
+> being over — will not be. On 2.9, embedded steering reuses
 > the PCC context's open `doca_dev` handle before probing its sender SF.
 
 On 3.x, the host-side per-QPN PCC trace summary remains the primary rate-feed

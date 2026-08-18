@@ -139,9 +139,9 @@ threshold, so CNPs fire steadily and the ECN loop takes over — the point of th
 ## 12. Quick reproduce
 
 This tutorial's single-DPU loopback (see the top-level README's
-[Combined run](../README.md#building-and-running-doca-pcc-part-iv)) doesn't need a separate NP role
-or `--tclass` — `doca_flow_ecn` marks CE unconditionally. The commands below are from the original
-2×BF3 bring-up with switch-based WRED, kept for reference:
+[PCC controller](../../README.md#the-pcc-controller-part-2) section) doesn't need a separate NP role
+or `--tclass` — the DOCA Flow program marks CE unconditionally. The commands below are from the
+original 2×BF3 bring-up with switch-based WRED, kept for reference:
 
 ```bash
 # Receiver (NP) — original 2xBF3 setup only; not used in this tutorial's single-DPU loopback:

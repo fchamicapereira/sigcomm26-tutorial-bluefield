@@ -1,15 +1,25 @@
-# `doca_flow_ecn_pcap` — ECN-mark **and** capture-to-pcap in one PF0 program
+# `doca_flow_ecn_pcap` — ECN-mark **and** capture-to-pcap in one PF0 program (DOCA 2.x)
 
-A DOCA Flow program (PF0, switch mode) that does what [`doca_flow_ecn`](doca_flow_ecn.c) and
-[`doca_flow_mirror`](doca_flow_mirror.c) do, **at the same time, in a single program**: it CE-marks
-(`ECN=11`) a configurable fraction of the wire traffic *and* mirrors a copy of each packet to a CPU
-RSS queue where it's written to a `.pcap` — while the original still forwards to the receiver SF
-untouched.
+A DOCA Flow program (PF0, switch mode) that CE-marks (`ECN=11`) a configurable fraction of the wire
+traffic *and* mirrors a copy of each packet to a CPU RSS queue where it's written to a `.pcap` —
+while the original still forwards to the receiver SF untouched.
 
 Why combine them? Only **one** DOCA Flow / DPDK primary process can own PF0 (and the
-`/var/run/dpdk/rte/config` lock) at a time, so you can't run `doca_flow_ecn` and `doca_flow_mirror`
-side by side — the second fails with *"Cannot create lock … another primary process running"*. This
+`/var/run/dpdk/rte/config` lock) at a time, so marking and capturing cannot run as two programs side
+by side — the second fails with *"Cannot create lock … another primary process running"*. This
 program folds both roles into one eSwitch pipeline so you can mark **and** watch the same traffic.
+
+Everything it does to a packet other than the capture is what
+[`doca_flow_solution.c`](doca_flow_solution.c) does — this file is the solution plus the capture
+path. It is **not** part of the participant exercise: it is hand-maintained (the solution and the
+template are generated from each other, this one is not) and it is the only target that links
+`libpcap`. See [`doca_flow_template.README.md`](doca_flow_template.README.md) for how the four
+programs in this directory relate.
+
+The DOCA 3.x build of this program is
+[`doca-3/doca-flow/doca_flow_ecn_pcap.c`](../../doca-3/doca-flow/doca_flow_ecn_pcap.c) — the same
+program with the same structure, but the mirror is gone from DOCA 3.2 onwards, so it uses a flooding
+hash pipe instead. That file's README has the full comparison.
 
 ---
 
@@ -38,10 +48,10 @@ program folds both roles into one eSwitch pipeline so you can mark **and** watch
 
 ## Build
 
-Part of the `doca-flow` meson build (links `libpcap`):
+Part of the `doca-2` meson build (links `libpcap`):
 
 ```bash
-meson setup build && ninja -C build      # from the repo root; produces build/doca-flow/doca_flow_ecn_pcap
+cd doca-2 && meson setup build && ninja -C build   # produces build/doca-flow/doca_flow_ecn_pcap
 ```
 
 Or natively with gcc (no meson needed — this is a plain host app):
@@ -60,7 +70,7 @@ Needs `libpcap-dev` (the [`Dockerfile`](../Dockerfile) installs it for the conta
 
 1. Bring up the loopback once per boot (SFs → ns0/ns1, OVS bridges, hugepages):
    ```bash
-   ./setup_roce_loopback.sh
+   sudo ./admin/local_scripts/setup_roce_loopback.sh
    ```
 2. Start the program on PF0. Run it in the **foreground** — the SPACE toggle needs a real terminal:
    ```bash
@@ -108,15 +118,15 @@ goodput** — the copy is made in eSwitch hardware; the original forwards unimpe
 ## Notes / design
 
 - **Uses plain `"switch,hws"` mode** (RSS/mirror capture needs it) — not the
-  `"switch,hws,isolated,disable_switch_rss"` + `rte_flow_isolate` that standalone `doca_flow_ecn` uses
-  on some testbeds to suppress RSS. Isolation would break the capture path.
+  `"switch,hws,isolated,disable_switch_rss"` + `rte_flow_isolate` that the marking-only programs in
+  this directory use on some testbeds to suppress RSS. Isolation would break the capture path.
 - **A mirror target cannot be an inline-RSS fwd** on this firmware (bind fails *"Invalid mirror list
   format"*). The mirror points at a dedicated **RSS pipe** (`FWD_PIPE → rss_pipe`), which delivers to
   CPU queue 0. The shared-mirror resource is 0-indexed with id 0 reserved as "no mirror", so the app
   reserves `MIRROR_ID + 1` resources.
 - **`--sample` is done in software** (write every Nth mirrored packet), keeping the mark ratio exact
-  and independent of the capture ratio. (`doca_flow_mirror` samples in hardware via
-  `parser_meta.random`; here that field is already used by `--percent`.)
+  and independent of the capture ratio — `parser_meta.random`, the obvious field to sample on in
+  hardware, is already used by `--percent`.
 - **The SPACE toggle needs a TTY.** Under a non-interactive launch (e.g. `</dev/null`, `nohup`) there
   is no terminal, so writing stays paused and the pcap stays empty by design — run in the foreground.
 - Point PCC at the uplink **PF** and RoCE at the **SF** — this program runs on PF0 (`mlx5_0`); traffic
@@ -126,3 +136,7 @@ Key source: [`doca_flow_ecn_pcap.c`](doca_flow_ecn_pcap.c) — `create_forward_t
 `create_sampling_pipe()` (`--percent`), `create_to_cpu_pipe()` / `bind_capture_mirror()` (the
 mirror→pcap path), and the `rte_eth_rx_burst` → `pcap_dump` loop with the SPACE/`--sample` gates in
 `main()`.
+
+The participant exercise derived from these same pipelines is
+[`doca_flow_template.README.md`](doca_flow_template.README.md), written up in
+[`guides/doca-flow.md`](../../guides/doca-flow.md).

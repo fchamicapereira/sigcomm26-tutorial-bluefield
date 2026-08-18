@@ -1,59 +1,81 @@
-This repository contains the source code and materials for the tutorial "Programming SmartNICs: From Packet Processing to Programmable Transport" to happen at SIGCOMM 2026.
+# Programming SmartNICs: From Packet Processing to Programmable Transport
 
-The PCC path-steering example is included as a Git submodule. Clone with
-submodules enabled, or initialize it after cloning:
+This is the **organizers' repository** for the tutorial "Programming SmartNICs: From Packet
+Processing to Programmable Transport", held at [SIGCOMM 2026](https://conferences.sigcomm.org/sigcomm/2026/tutorials/smartnic/).
+It holds the exercise sources, the guides that were handed out, the fleet tooling that ran a dozen
+BlueField-3 cards across five sites, and the bring-up notes behind all of it.
 
-```bash
-git clone --recurse-submodules <repository-url>
-# Existing checkout:
-git submodule update --init --recursive
-```
+**The tutorial has been delivered and this repository is frozen.** It is kept as a record and as a
+starting point for anyone who wants to run the same exercises on their own BlueField-3 — not as an
+actively maintained project. Everything below describes what was actually built and run; nothing
+here is a plan.
 
-Here is the brief overview of the tutorial, as shown in the SIGCOMM 2026 [website](https://conferences.sigcomm.org/sigcomm/2026/tutorials/smartnic/):
+Participants worked from a separate, much smaller repository —
+[`sigcomm26-tutorial-bluefield-participants`](https://github.com/fchamicapereira/sigcomm26-tutorial-bluefield-participants)
+— which is **generated from this one** by [`admin/update_participants_repo_on_github.py`](admin/update_participants_repo_on_github.py).
+No solutions ship there. If you want the exercises as a participant saw them, read that repo; if you
+want the answers, they are here.
 
-# Overview
+## Repository layout
 
-## Summary
-Programmable switches transformed networking research by making the data plane accessible and programmable. A similar shift is now happening at the network edge: SmartNICs, DPUs, and IPUs are evolving into programmable computing platforms capable not only of packet processing, but also of stateful services and transport-layer functionality. Rather than being fixed-function offload devices, they are becoming heterogeneous subsystems tightly integrated with host software stacks.
+| Path                 | What                                                                                                                                                                                                                                                                         |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`guides/`](guides/) | **The participant-facing material.** One Markdown source per guide plus the rendered PDF that was handed out. This is the best entry point to the tutorial's actual content.                                                                                                 |
+| [`doca-2/`](doca-2/) | The exercises built against **DOCA 2.x** (developed on 2.9): `doca-flow/`, `doca-pcc-ecn/`, and a symlink to the shared `pcc-path-steering/`. Self-contained meson project.                                                                                                  |
+| [`doca-3/`](doca-3/) | The same exercises against **DOCA 3.x** (verified on 3.1 and 3.4), plus the real `pcc-path-steering/` tree. Self-contained meson project.                                                                                                                                    |
+| [`admin/`](admin/)   | Fleet tooling. [`fleet.py`](admin/fleet.py) drives every card over ssh; [`local_scripts/`](admin/local_scripts/) are the per-card scripts it ships; [`update_participants_repo_on_github.py`](admin/update_participants_repo_on_github.py) regenerates the participant repo. |
+| [`docs/`](docs/)     | Graphviz sources and rendered figures used by the guides and this README (`make -C docs`).                                                                                                                                                                                   |
+| [`slides/`](slides/) | The hands-on slide deck and the screenshots in it.                                                                                                                                                                                                                           |
+| Root scripts         | [`run_container.sh`](run_container.sh), [`run_server.sh`](run_server.sh), [`run_client.sh`](run_client.sh), [`benchmark.sh`](benchmark.sh), [`check_ecn_bits_from_pcap.sh`](check_ecn_bits_from_pcap.sh) — traffic generation and helper wrappers.                     |
 
+**Why two `doca-N/` trees.** A BlueField-3 only builds against the DOCA release it is running, and
+the fleet was not uniform: some cards shipped DOCA 2.x, others 3.x. Rather than branch inside the
+sources, each release gets its own directory with its own `meson.build`.
+The exercise sources are deliberately kept as close as possible between them; where the SDK forced a
+difference it is absorbed by a `doca_flow_compat.h` shim and documented in the relevant README.
+`admin/fleet.py doca` prints which tree each card needs.
 
-This tutorial provides a unified, systems-oriented introduction to SmartNIC programmability, spanning four tightly coupled dimensions: data-plane packet processing, stateful network function design, transport-layer programmability, and host-level integration. It combines conceptual foundations with guided hands-on exercises on NVIDIA BlueField platforms using NVIDIA Launchpad, allowing participants to gain both architectural understanding and practical experience with packet-processing and transport programmability.
+`doca-2/pcc-path-steering` is a **symlink** to `doca-3/pcc-path-steering` — the path-steering bonus
+exercise is one tree serving both, with its DOCA 2.9/3.x differences handled internally. (It used to
+be a git submodule; it was frozen and vendored into this repository, so no `--recurse-submodules` is
+needed.)
 
+> **`guides/` is the only description of the exercises.** Earlier root-level drafts
+> (`tutorial-doca-flow.md`, `tutorial-doca-pcc.md`) were removed once they had drifted from the code;
+> `git log` has them if you ever want them. Anything that describes an exercise now lives in
+> `guides/`, next to the PDF that was actually handed out.
 
-By the end of the tutorial, attendees will understand the design space across SmartNIC, DPU, and IPU platforms; write and deploy packet-processing logic on NIC targets; design and evaluate stateful services; experiment with transport-layer customization and programmable congestion control; and integrate NIC-based functionality with host control planes and software stacks.
+# The exercises
 
+Three hands-on exercises, each with its own guide in [`guides/`](guides/). They are one continuous
+story: mark congestion, react to it, then use the reaction to steer traffic.
 
-## Motivation
-Over the past decade, P4 and programmable switches opened the door to line-rate packet processing research. Today, SmartNICs extend that opportunity beyond switches and into end hosts, where networking, systems, and transport concerns intersect. Modern NIC platforms increasingly support programmable high-performance pipelines, embedded CPUs, accelerators, and tighter coordination with host software, enabling new designs for offload, isolation, efficiency, congestion control, and AI-aware networking.
+| Guide                                                                | Exercise                                                                                                                                          | Sources                                                                                        |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [`guides/doca-flow.md`](guides/doca-flow.md) (Part 1)                | Program the eSwitch with **DOCA Flow** to CE-mark a chosen fraction of live RoCE traffic. The participant writes three pipe-building functions.   | [`doca-2/doca-flow/`](doca-2/doca-flow/), [`doca-3/doca-flow/`](doca-3/doca-flow/)             |
+| [`guides/doca-pcc.md`](guides/doca-pcc.md) (Part 2)                  | Write the two rate reactions of a DCQCN-style **DOCA PCC** reaction point, running on the **DPA**, that responds to the CNPs those marks provoke. | [`doca-2/doca-pcc-ecn/`](doca-2/doca-pcc-ecn/), [`doca-3/doca-pcc-ecn/`](doca-3/doca-pcc-ecn/) |
+| [`guides/pcc-path-steering.md`](guides/pcc-path-steering.md) (bonus) | Combine the two: feed per-QP PCC rate reports back into a live DOCA Flow hash pipe to split traffic across two virtual paths.                     | [`doca-3/pcc-path-steering/`](doca-3/pcc-path-steering/)                                       |
+| [`guides/tailscale.md`](guides/tailscale.md)                         | Pre-tutorial setup: how participants joined the tailnet that reached the cards.                                                                   | —                                                                                              |
 
+Each participant worked on **one** BlueField-3, whose two ports are reachable to each other, so a
+single card behaves like a small two-node network talking to itself: an SF on each port acts as sender
+and receiver, and traffic leaving `p1` arrives at `p0` where the marking happens. The cards were ours
+and remote — 12 of them across five sites, reached over Tailscale ([The fleet](#the-fleet)).
 
-Despite strong research and industrial momentum, the community still lacks a structured, hands-on tutorial that systematically teaches how to program SmartNIC packet processing, build stateful network functions, experiment with transport functionality on NICs, and integrate programmable NIC logic into end-host systems. This tutorial is designed to fill that gap.
-
-
-## Outline
-The tutorial follows a progressive structure from foundations to advanced functionality.
-
-
-Part I — Architectures and Packet Processing Foundations
-We begin by introducing the architectural landscape of SmartNICs, DPUs, and IPUs, including their heterogeneous execution models and their relationship to host software stacks. We then discuss packet-processing programming models, including match-action pipelines, stateful logic, and control-plane coordination.
-
-
-Part II — Hands-On Stateful Services
-Participants then move to hands-on exercises on NVIDIA BlueField-3 platforms using NVIDIA Launchpad. They develop packet-processing functionality, including forwarding, filtering, table lookups, and packet transformations, in the ConnectX packet processing pipeline using DPL (DOCA Pipeline Language) and DOCA Flow, reinforcing the concepts introduced earlier.
-
-
-Part III — Transport Programming on SmartNICs
-The tutorial then expands from packet processing into transport-layer customization. This session covers programmable congestion control, custom transport logic, NIC-based transport abstractions, and the broader research challenges that arise when transport functionality moves onto programmable NICs.
-
-
-Part IV — Hands-On Transport Experimentation and Host Integration
-Finally, participants explore transport programmability experimentally. Through hands-on exercises using DOCA PCC (Programmable Congestion Control) and DPA (Data Path Accelerator) programming, they customize transport-layer functionality, evaluate performance trade-offs, and examine host-NIC coordination. The goal is to present SmartNICs not as isolated packet devices, but as heterogeneous, programmable systems spanning packet processing, transport functionality, slow-path execution, and host-level integration.
+Everything is **DOCA Flow** and **DOCA PCC** on a BlueField-3, in C, built and run on the card's own
+Arm cores.
 
 # Physical setup
 
-Here are the outputs of some commands to show the setup of the environment for the tutorial. The commands are run on the ARM cores of a BlueField-3 DPU. The Bluefield DPU has a single 100G link connecting both ports to each other.
+Everything from here on is the **operational record**: how a card has to be configured for the
+exercises to work, what was measured, and which of it was hard-won. The concrete values below are
+from `bf3-ulisbon-1`, a 100G card with its two ports joined by a DAC cable — it is not special, just
+the card these notes were taken on; see
+[The fleet](#the-fleet) for the cards the tutorial actually ran on and
+[How much the cards differ](#how-much-the-cards-differ) for what varies between them. All commands are
+run on the Arm cores of the BlueField-3.
 
-```
+```bash
 ubuntu@bluefield-1:~/sigcomm26-tutorial-bluefield$ sudo bfver
 --/dev/mmcblk0boot1
 BlueField ATF version: v2.2(release):4.9.1-21-gfc25b08d9
@@ -280,13 +302,14 @@ under our control (this is what lets DOCA Flow intercept and mark packets).
 | PF0 host rep | —              | —        | `pf0hpf`                       | Host-side representor of PF0 (unused here)      |
 | PF1 host rep | —              | —        | `pf1hpf`                       | Host-side representor of PF1 (unused here)      |
 
-The MACs above are testbed A's; every other value is the same on any BlueField-3 in DPU mode.
+The MACs above are `bf3-ulisbon-1`'s; every other value is the same on any BlueField-3 in DPU mode.
 
 What the tutorial requires of the two physical ports is only that **a frame leaving p1 arrives at
-p0**. Testbed A gets that from a single 100G DAC cable wired straight between them, so everything
-happens inside one DPU. Testbed B has no such cable and instead reaches p0 from p1 across two lab
-leaf switches — measurably just as good (see [Reference testbeds](#reference-testbeds)). Either
-way, packets that leave p1 re-enter at p0, which is all the rest of this README assumes.
+p0**. Some cards get that from a single DAC cable wired straight between the two ports, so everything
+happens inside one DPU. Others have no such cable and reach p0 from p1 across two lab leaf switches,
+which measures just as well — two switch hops tracked a private DAC to within 0.6% on the same
+exercise. Either way, packets that leave p1 re-enter at p0, which is all the rest of this README
+assumes.
 
 ### OVS bridges — the default forwarding path
 
@@ -309,14 +332,20 @@ recreates exactly these two. See below for why it imposes the layout rather than
 
 ### Scalable Functions (SFs) — the RoCE endpoints
 
-Two SFs, one per PF, carry the actual RoCE traffic. Each SF's netdev is moved into its own
-**network namespace** so that the RoCE traffic is forced out onto the wire (p1 → p0) instead of
+**Three** SFs carry the RoCE traffic — one per PF for the sender/receiver pair the main exercises use,
+plus a second receiver on PF0 that only the path-steering bonus needs. Each SF's netdev is moved into
+its own **network namespace** so that the RoCE traffic is forced out onto the wire (p1 → p0) instead of
 being delivered locally by the host kernel:
 
-| SF             | RDMA dev | Netdev (in ns) | Representor   | Namespace | IP         | Role                       |
-| -------------- | -------- | -------------- | ------------- | --------- | ---------- | -------------------------- |
-| sfnum 0 on PF0 | `mlx5_2` | `enp3s0f0s0`   | `en3f0pf0sf0` | `ns0`     | `10.0.0.1` | **Receiver / server (NP)** |
-| sfnum 0 on PF1 | `mlx5_3` | `enp3s0f1s0`   | `en3f1pf1sf0` | `ns1`     | `10.0.0.2` | **Sender / client (RP)**   |
+| SF             | RDMA dev | Netdev (in ns) | Representor   | Namespace | IP          | Role                                     |
+| -------------- | -------- | -------------- | ------------- | --------- | ----------- | ---------------------------------------- |
+| sfnum 0 on PF0 | `mlx5_2` | `enp3s0f0s0`   | `en3f0pf0sf0` | `ns0`     | `10.0.0.1`  | **Receiver / server (NP)**               |
+| sfnum 0 on PF1 | `mlx5_3` | `enp3s0f1s0`   | `en3f1pf1sf0` | `ns1`     | `10.0.0.2`  | **Sender / client (RP)**                 |
+| sfnum 4 on PF0 | `mlx5_4` | `enp3s0f0s4`   | `en3f0pf0sf4` | `ns0_1`   | `10.0.0.11` | Second receiver — **path steering only** |
+
+Parts 1 and 2 only ever touch the first two; `ns0_1` sits idle unless you are running the bonus
+exercise, whose ingress role delivers path 0 to `10.0.0.1` and path 1 to `10.0.0.11`. It is created
+unconditionally so one setup run serves all three exercises.
 
 Run [`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh) to build this whole layout. **None of it
 survives a reboot or power-cycle, so re-run it after every boot:**
@@ -326,7 +355,7 @@ sudo ./admin/local_scripts/setup_roce_loopback.sh
 ```
 
 > **The script imposes this layout; it does not discover it.** It deletes every OVS bridge and
-> every SF on both PFs, then creates exactly the two SFs above, rebuilds `ovsbr1`/`ovsbr2`,
+> every SF on both PFs, then creates exactly the three SFs above, rebuilds `ovsbr1`/`ovsbr2`,
 > reserves hugepages, creates the namespaces, and asserts every line of the table before exiting
 > — any deviation is a hard failure, so a run that finishes is a run you can trust. That is
 > deliberate: the *sfnum* of an SF is yours to choose, but its **RDMA device index (`mlx5_N`) is
@@ -335,14 +364,14 @@ sudo ./admin/local_scripts/setup_roce_loopback.sh
 > from zero SFs and create ours in a fixed order. It also means the tutorial never needs a
 > `--sf-num` flag, since the receiver is always sfnum 0.
 >
-> Because it is destructive, a DPU staged for something else loses that staging. For the NVIDIA lab
-> DPU, [`admin/local_scripts/reset_nvidia_dpu_to_original_config.sh`](admin/local_scripts/reset_nvidia_dpu_to_original_config.sh) puts its
-> original layout back (see [Reference testbeds](#reference-testbeds)).
+> Because it is destructive, a card staged for something else loses that staging. For the
+> `bf3-nvidia-*` cards, [`admin/local_scripts/reset_nvidia_dpu_to_original_config.sh`](admin/local_scripts/reset_nvidia_dpu_to_original_config.sh)
+> puts the original layout back (see [Handing a borrowed card back](#handing-a-borrowed-card-back)).
 
 > **Why the SF MACs are derived, not fixed.** Each SF is created with an explicit hardware address
 > (`mlnx-sf -a create -m ...`), because an SF created without one can come up with
 > `hw_addr 00:00:00:00:00:00` — and since the RDMA **node GUID is derived from it**, a zero there
-> breaks RoCE connection setup. That was observed on PF1 of the NVIDIA lab DPU, whose PF0 has a MAC
+> breaks RoCE connection setup. That was observed on PF1 of a `bf3-nvidia-*` card, whose PF0 has a MAC
 > pool configured but whose PF1 does not.
 >
 > The address must not be a *constant*, though: on a DPU whose ports are cabled into a shared
@@ -354,8 +383,8 @@ sudo ./admin/local_scripts/setup_roce_loopback.sh
 >
 > | | p0 → receiver SF | p1 → sender SF |
 > |---|---|---|
-> | Testbed A | `f0:fb:7f:e2:e2:76` → `f2:fb:7f:e2:e2:76` | `f0:fb:7f:e2:e2:77` → `f2:fb:7f:e2:e2:77` |
-> | Testbed B | `5c:25:73:e6:00:d0` → `5e:25:73:e6:00:d0` | `5c:25:73:e6:00:d1` → `5e:25:73:e6:00:d1` |
+> | `bf3-ulisbon-1` | `f0:fb:7f:e2:e2:76` → `f2:fb:7f:e2:e2:76` | `f0:fb:7f:e2:e2:77` → `f2:fb:7f:e2:e2:77` |
+> | a `bf3-nvidia-*` card | `5c:25:73:e6:00:d0` → `5e:25:73:e6:00:d0` | `5c:25:73:e6:00:d1` → `5e:25:73:e6:00:d1` |
 
 > **Why namespaces.** They stop the *Linux kernel* from delivering `10.0.0.1 ↔ 10.0.0.2` locally
 > — both IPs sit on this one host, so without isolation the kernel short-circuits them and RoCE
@@ -366,9 +395,10 @@ sudo ./admin/local_scripts/setup_roce_loopback.sh
 >
 > **Why `ovsbr2` gets two explicit flows.** Left to its own devices, `ovsbr2` has never seen the
 > receiver's MAC as a *source*, so every frame the sender emits is unknown-unicast and gets
-> **flooded** out every port. On testbed A that is harmless — the only place a flooded frame can go
-> is across the DAC to p0. On testbed B it would flood pod23's entire VLAN at 92 Gb/s, which is
-> antisocial and may trip storm control. The script therefore pins both directions
+> **flooded** out every port. On a card with a private DAC that is harmless — the only place a flooded
+> frame can go is across the cable to p0. On a card wired into a shared fabric it would flood the whole
+> lab VLAN at 92 Gb/s, which is antisocial and may trip storm control. The script therefore pins both
+> directions
 > (`dl_dst=<receiver MAC> → p1`, `dl_dst=<sender MAC> → the sender SF`) so the traffic is plain
 > unicast; everything else still falls through to `NORMAL` learning.
 >
@@ -385,10 +415,11 @@ sudo ./admin/local_scripts/setup_roce_loopback.sh
 
 ### Firmware NV-config (PCC prerequisite)
 
-DOCA PCC (Part IV) needs two NV-config knobs:
+DOCA PCC (Part 2) needs two NV-config knobs:
 
 - **`USER_PROGRAMMABLE_CC=1`** (default `0`) — enables the programmable-CC / PCC object. Without it
-  `doca_pcc` fails with `PCC CONFIG object is not supported on this device`.
+  any PCC program (ours or NVIDIA's stock `doca_pcc`) fails with
+  `PCC CONFIG object is not supported on this device`.
 - **`DPA_AUTHENTICATION=0`** — this is the *factory default*, but a DPU may ship hardened to `1`. With it `1`, the firmware only runs **signed** DPA images and rejects a locally `dpacc`-built one, so *both* our controller **and the stock DOCA `doca_pcc`** fail at startup with `flexio_create_prm_process ... Failed to create PRM process` (syndrome `0x8f333`). We disable it because tutorial participants recompile the DPA algo on every tweak; authenticating each build is a heavyweight, beta, static-link-only signing chain (generate an OEM root CA → install a signed cert container with `mlxdpa`/`flint` → sign the ELF), so it's impractical here — see NVIDIA's [DPA Development](https://networking-docs.nvidia.com/doca/sdk/dpa-development) guide if you do need signed images.
 
 `REAL_TIME_CLOCK_ENABLE` is **not** needed (the RTT loop uses the free-running clock).
@@ -433,13 +464,13 @@ DOCA PCC (Part IV) needs two NV-config knobs:
    #   DPA_AUTHENTICATION                     False(0)     False(0)     False(0)     <- Current must be 0
    ```
 
-   Until **Current** reads `USER_PROGRAMMABLE_CC=1` *and* `DPA_AUTHENTICATION=0`, `doca_pcc` refuses
-   to start — with `PCC CONFIG object is not supported on this device` (knob 1) or
+   Until **Current** reads `USER_PROGRAMMABLE_CC=1` *and* `DPA_AUTHENTICATION=0`, the controller
+   refuses to start — with `PCC CONFIG object is not supported on this device` (knob 1) or
    `Failed to create PRM process` / syndrome `0x8f333` (knob 2).
 
 > **Gotcha: `USER_PROGRAMMABLE_CC=1` appears to disable the NIC's stock DCQCN, not just add an
-> optional path alongside it.** With `doca_flow_ecn` marking 100% of packets CE and `doca_pcc`
-> **not** running, expect **no** throughput drop — traffic stays pinned at line rate (~92.6 Gb/s)
+> optional path alongside it.** With the Flow program marking 100% of packets CE and no PCC controller
+> running, expect **no** throughput drop — traffic stays pinned at line rate (~92.6 Gb/s)
 > even with `-R` left off entirely (i.e. no rdma_cm/ECE QP→algo-slot negotiation at all, so this
 > isn't an artifact of ECE binding the QP to an empty slot). CNPs genuinely are flowing and being
 > processed in hardware the whole time — `/sys/class/infiniband/mlx5_0/hw_counters/np_cnp_sent` and
@@ -450,63 +481,153 @@ DOCA PCC (Part IV) needs two NV-config knobs:
 > (≈12.5% per CNP, a ~250x more aggressive cut) made zero measurable difference. Working
 > explanation: `USER_PROGRAMMABLE_CC=1` is a persistent NV-config mode, not a per-QP setting — once
 > it's live, the firmware seems to route RP rate decisions through the DPA algorithm slot
-> unconditionally, whether or not a program is loaded there. With `doca_pcc` not running that slot
+> unconditionally, whether or not a program is loaded there. With no controller running that slot
 > is empty, so CNPs still get parsed and counted but nothing ever writes a new rate back to the QP.
 > Practically: **on a DPU configured for this tutorial, there's no way to observe plain stock
 > DCQCN** — either a PCC algorithm is loaded and reacting, or nothing reacts, regardless of `-R`.
 > (Not yet confirmed by the one fully decisive test — `USER_PROGRAMMABLE_CC=0` + a full
-> power-cycle — since that would also temporarily break Part IV.)
+> power-cycle — since that would also temporarily break the PCC exercise.)
+>
+> **A data point against that explanation:** a card that still had `USER_PROGRAMMABLE_CC=0` handled
+> 2.4 M CNPs — stock DCQCN nominally in charge — and throughput still did not move (92.10 → 92.07
+> Gb/s). If the `=1` mode were what suppressed the stock reaction, that run should have slowed down.
+> It is not conclusive either way: the default `rpg_gd=11` is a ≈0.05% cut per CNP, which a single QP
+> at line rate may simply absorb. Treat the explanation above as unresolved.
 
-## Reference testbeds
+## The fleet
 
-Everything above describes **testbed A**, the development box. The tutorial is also being brought
-up on **testbed B**, a BlueField-3 in an NVIDIA lab pod, to make sure the exercises don't silently
-depend on one machine's wiring. The two differ in almost every axis that the data path touches, so
-they are worth stating explicitly — most of the portability work in `doca-flow/` exists because of
-a line in this table.
+The tutorial ran on **12 BlueField-3 cards at five sites**. The inventory is
+[`admin/machines.txt`](admin/machines.txt), and it is the single source of truth for
+[`admin/fleet.py`](admin/fleet.py):
 
-|                            | **Testbed A** (`bluefield-1`, dev box)                                         | **Testbed B** (`dpu`, NVIDIA lab)                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| Board                      | BlueField-3, 2×100G                                                            | BlueField-3 **B3220**, 2×200G                                                                          |
-| BSP / OS release           | `bf-bundle-2.9.1-40_24.11-ubuntu-22.04_prod`                                   | `bf-bundle-2.7.0-33_24.04_ubuntu-22.04_prod`                                                           |
-| Kernel                     | `5.15.0-1057-bluefield`                                                        | `5.15.0-1042-bluefield`                                                                                |
-| **DOCA**                   | **2.9.1**                                                                      | **2.7.0** (`doca-devel 2.7.0085-1`)                                                                    |
-| Firmware                   | `32.43.2402`                                                                   | `32.41.1000` (PSID `MT_0000000884`)                                                                    |
-| DOCA/OFED                  | `24.10-1.1.4`                                                                  | `24.04-0.6.6`                                                                                          |
-| OVS                        | `2.9.1-0013-24.11-based-3.3.3`                                                 | `2.7.0-0056-24.01-based-2.17.8`                                                                        |
-| **p0 ↔ p1**                | **direct 100G DAC** (FS `Q28-PC03`, 3 m)                                       | **no DAC** — each port goes to a *different* leaf switch                                               |
-| p0 / p1 MAC                | `f0:fb:7f:e2:e2:76` / `:77`                                                    | `5c:25:73:e6:00:d0` / `:d1`                                                                            |
-| MTU                        | 1500                                                                           | 1500                                                                                                   |
-| **SF layout _as shipped_** | **one per PF**                                                                 | **both on PF0**                                                                                        |
-| Receiver SF, as shipped    | `pci/0000:03:00.0/229408` → `en3f0pf0sf0` / `enp3s0f0s0` / `mlx5_2`            | `pci/0000:03:00.0/229408` → `en3f0pf0sf2` / `enp3s0f0s2` / `mlx5_2`                                    |
-| Sender SF, as shipped      | `pci/0000:03:00.1/294944` → `en3f1pf1sf0` / `enp3s0f1s0` / `mlx5_3`            | `pci/0000:03:00.0/229409` → `en3f0pf0sf3` / `enp3s0f0s3` / `mlx5_3`                                    |
-| OVS bridges, as shipped    | `ovsbr1` (`p0`,`pf0hpf`,`en3f0pf0sf0`), `ovsbr2` (`p1`,`pf1hpf`,`en3f1pf1sf0`) | `host_br` (`pf0hpf`,`en3f0pf0sf2`), `wire_br` (`p0`,`en3f0pf0sf3`); **`p1` and `pf1hpf` in no bridge** |
-| **Build**                  | native (`ninja -C build`, DOCA 2.9 matches)                                    | **container** — native fails, DOCA 2.7 ships no `doca-common.pc`                                       |
+| Site prefix        | Cards |
+| ------------------ | ----- |
+| `bf3-ulisbon-`     | 3     |
+| `bf3-nvidia-`      | 4     |
+| `bf3-umich-`       | 2     |
+| `bf3-uwashington-` | 2     |
+| `bf3-uwaterloo-`   | 1     |
 
-The "as shipped" rows are what each box looks like *before* the tutorial touches it, and they are
-why [`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh) wipes and rebuilds rather than adapting:
-testbed B ships with **both SFs on PF0**, which can never work here, because the sender has to sit
-on PF1 for its traffic to leave on p1 and re-enter at p0 where DOCA Flow marks it. After the script
-runs, **both boxes are identical** — one SF per PF at sfnum 0, `mlx5_2`/`mlx5_3`, `ovsbr1`/`ovsbr2`
-— and every command in this README works unchanged on either.
+Cards are addressed by their **Tailscale** names, so there is no `ssh_config` and no addresses to
+track; participants reached them over the same tailnet ([`guides/tailscale.md`](guides/tailscale.md)).
+`fleet.py` is transport and aggregation only — every verb ships one of
+[`admin/local_scripts/`](admin/local_scripts/) to each card over stdin and renders one table of
+results, so any card the tool cannot reach can still be driven by running the same script on it by
+hand. Per-card output from the last runs is archived in `admin/results/` (gitignored).
+
+The fleet was not uniform in DOCA version or in wiring, which is why the exercises exist in two
+`doca-N/` trees and why `setup_roce_loopback.sh` imposes its layout rather than discovering it.
+`admin/fleet.py doca`, `firmware`, `links` and `pcc-ready` report the spread.
+
+## How much the cards differ
+
+The fleet is not uniform, and the exercises had to survive that. No card is special or canonical —
+they are all just cards, and every one of them runs the same two `doca-N` trees unmodified. Here is
+what each site actually has, as reported by the last full `admin/fleet.py` sweep:
+
+| Cards | DOCA | Firmware | Link speed † | Tree |
+|---|---|---|---|---|
+| `bf3-ulisbon-1..3` | `2.9.1008` | `32.43.2402` | 100G | `doca-2` |
+| `bf3-nvidia-1..4` | **`2.7.0085`** | `32.41.1000` (PSID `MT_0000000884`) | 200G | `doca-2` |
+| `bf3-umich-1..2` | `2.9.1008` | `32.43.2402` | 100G or 200G † | `doca-2` |
+| `bf3-uwashington-1..2` | `3.1.0105` | `32.46.1006` | 100G or 200G † | `doca-3` |
+| `bf3-uwaterloo-1` | **`3.4.0112`** | — | 200G | `doca-3` |
+
+Read that table for the spread, not as a spec sheet: **DOCA 2.7 through 3.4**, three firmware versions,
+and a mix of 100G and 200G links. The `doca-2`/`doca-3` split plus the `doca_flow_compat.h` shims are
+what make one set of sources cover all of it.
+
+> † **Link speeds are not reliably pinned down by this data, so do not quote them.** The two sweeps
+> that record speed disagree on four of the twelve cards: `print_link_status.sh` (via `mlxlink`) reports
+> 100G for both `bf3-umich-*` where `devices_check` (via sysfs `/sys/class/net/pN/speed`) reports
+> `200000`; for `bf3-uwashington-*`, `mlxlink` reports an asymmetric 100G on p0 and 200G on p1, while
+> sysfs reports `200000`/`200000` on `-1` and `100000`/`100000` on `-2`. The sweeps ran at different
+> times, so a port may genuinely have been re-cabled or renegotiated between them. Only `bf3-ulisbon-*`
+> (100G) and `bf3-nvidia-*` (200G) have both tools in agreement. Re-run `admin/fleet.py links` against
+> a live card if you need the real number.
+
+Goodput is bounded by a single QP at 1500-byte MTU, not by the link: the 200G NVIDIA cards land in
+the same ~92 Gb/s band as the 100G ones. `bf3-uwaterloo-1` is the exception at ~196 Gb/s — worth
+knowing if you compare numbers across sites, and worth remembering that the PCC exercise's "rate
+collapses to ~0.08 Gb/s" result holds regardless.
+
+Regenerate any of this with `admin/fleet.py doca`, `firmware`, `links` and `pcc-ready`.
+
+> Where a value above is missing, or where a `fleet.py test-tutorial` run did not come back clean,
+> it was a **per-run condition, not a property of the card**:
+>
+> - **`bf3-uwaterloo-1` firmware** — not captured; that sweep hit `ERROR: passwordless sudo is
+>   required (logged in as s26t)`. The card itself is fine, and passes the exercise.
+> - **`bf3-umich-2`** — the only card with no completed run at all, and **not because anything is
+>   wrong with it**. Its `test-tutorial` run got through every on-card step — SFs deleted and recreated
+>   with derived MACs, `mlx5_2`/`mlx5_3` and their representors up, `ovsbr1`/`ovsbr2` built, hugepages
+>   reserved, all three namespaces configured, sender neighbour pinned — and then failed the *one*
+>   step that depends on the wire: `2 packets transmitted, 0 received, 100% packet loss` pinging
+>   `10.0.0.1` from `ns1`. `@@build=fail` / `@@flow=fail` are cascade effects of that single failure.
+>   The card's loopback demonstrably does work: a later `cleanup-cards` sweep caught it running
+>   `benchmark.sh` with four live `ib_write_bw` processes across `ns0`/`ns1`, which is impossible
+>   unless p1 → p0 is carrying traffic. So this was a transient — most plausibly contention, since
+>   `setup_roce_loopback.sh` is destructive and asserts every line it sets up, and will fight a card
+>   that is already mid-exercise.
+> - **`bf3-umich-1`** — Part 1 passed completely here (7483/7483 captured IPv4 packets CE-marked);
+>   only the PCC step was **skipped**, because the test's inline `pcc-ready` check found the firmware
+>   knobs not yet live. A later `fleet.py pcc-ready` sweep reports `@@upcc=1 @@dpa=0 → ready` on this
+>   card, so the knobs were staged after that test ran.
+> - **`bf3-uwashington-1`** — skipped as `busy — in use by another workload (1 process(es)) — not
+>   touched`, deliberately, so it was never exercised in that sweep; its identically configured sibling
+>   `bf3-uwashington-2` passed.
+
+**None of that needs any manual build setup.** `meson setup build doca-2` (or `doca-3`) followed by
+`ninja` works as-is on every card in the fleet, DOCA 2.7 included — the `doca-N` split plus the
+`doca_flow_compat.h` shims absorb the SDK differences, and there is no `PKG_CONFIG_PATH` or other
+environment fiddling to do by hand. `admin/fleet.py test-tutorial` is what establishes this: it does a
+clean from-scratch build and then runs the whole exercise end to end — loopback, flow program, RoCE
+traffic, ECN marking verified in a pcap, PCC controller, rate collapse — and reports pass/fail per
+card. It passes on the fleet.
+
+### Where the divergence actually bites
+
+One group of cards arrives in an *as-shipped* state that differs enough to matter, and it is why
+[`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh) wipes and rebuilds rather than
+adapting. The NVIDIA cards ship with **both SFs on PF0**:
+
+| | Typical (`bf3-ulisbon-*`) | NVIDIA cards |
+|---|---|---|
+| SF layout as shipped | one per PF | **both on PF0** |
+| Receiver SF | `pci/0000:03:00.0/229408` → `en3f0pf0sf0` / `enp3s0f0s0` / `mlx5_2` | `pci/0000:03:00.0/229408` → `en3f0pf0sf2` / `enp3s0f0s2` / `mlx5_2` |
+| Sender SF | `pci/0000:03:00.1/294944` → `en3f1pf1sf0` / `enp3s0f1s0` / `mlx5_3` | `pci/0000:03:00.0/229409` → `en3f0pf0sf3` / `enp3s0f0s3` / `mlx5_3` |
+| OVS bridges | `ovsbr1` (`p0`,`pf0hpf`,`en3f0pf0sf0`), `ovsbr2` (`p1`,`pf1hpf`,`en3f1pf1sf0`) | `host_br` (`pf0hpf`,`en3f0pf0sf2`), `wire_br` (`p0`,`en3f0pf0sf3`); **`p1` and `pf1hpf` in no bridge** |
+| `p0` ↔ `p1` | direct DAC (FS `Q28-PC03`, 3 m) | **no DAC** — each port goes to a *different* leaf switch |
+
+Both SFs on PF0 can never work here, because the sender has to sit on PF1 for its traffic to leave on
+p1 and re-enter at p0 where DOCA Flow marks it.
+
+After the script runs, **every card is identical** — `mlx5_2`/`mlx5_3` (plus `mlx5_4` for the bonus),
+`ovsbr1`/`ovsbr2` — and every command in this README works unchanged on any of them.
 
 Nothing about the SF layout is fixed in hardware: SFs are created and destroyed at run time
 (`mlnx-sf`, a wrapper over `devlink port add/del`), their sfnum is chosen by us, and
-`PER_PF_NUM_SF=False(0)` on both boxes means the SF pool is device-wide, so PF1 can host one with
+`PER_PF_NUM_SF=False(0)` everywhere means the SF pool is device-wide, so PF1 can host one with
 no NV-config change or power-cycle. None of it survives a reboot.
-| `USER_PROGRAMMABLE_CC` | `True(1)` | **`False(0)`** — Part IV (PCC) will not start until this is flipped |
-| `DPA_AUTHENTICATION` | `False(0)` | `False(0)` |
-| `PER_PF_NUM_SF` / `PF_TOTAL_SF` / `NUM_OF_VFS` | `False(0)` / `0` / `16` | `False(0)` / `0` / `16` |
 
-Both boxes run DPU mode with **both PFs in `switchdev`** (`devlink dev eswitch show pci/0000:03:00.{0,1}`
+The NV-config knobs that matter (`mlxconfig -e q`, *Current* column) ended up the same everywhere:
+`USER_PROGRAMMABLE_CC=True(1)`, `DPA_AUTHENTICATION=False(0)`, and
+`PER_PF_NUM_SF=False(0)` / `PF_TOTAL_SF=0` / `NUM_OF_VFS=16`. Getting there took a staging step on
+some cards — the NVIDIA ones shipped with `USER_PROGRAMMABLE_CC=False(0)`, which needs a real
+power-cycle to change — but by the tutorial `admin/fleet.py pcc-ready` reported
+`@@upcc=1 @@dpa=0 → ready` on **all twelve**.
+
+All cards run DPU mode with **both PFs in `switchdev`** (`devlink dev eswitch show pci/0000:03:00.{0,1}`
 → `mode switchdev inline-mode none encap-mode basic`), so the eSwitch assumptions in
-[Configuration setup](#configuration-setup) hold on either.
+[Configuration setup](#configuration-setup) hold throughout.
 
-### Testbed B: what sits on the wire
+### When the two ports are not cabled to each other
 
-Testbed A's two ports are cabled to each other, so "the wire" is a closed 3 m loop. Testbed B's
-ports are cabled into a production-style fabric, and **not to the same switch** — passive LLDP
-capture (`tcpdump -i pN -e 'ether proto 0x88cc'`) shows a different neighbour on each port:
+All the tutorial needs of the two physical ports is that **a frame leaving p1 arrives at p0**. On the
+`bf3-ulisbon-*` cards that comes from a direct DAC, so "the wire" is a closed 3 m loop. The
+`bf3-nvidia-*` cards have no such cable: their ports go into a production-style fabric, and **not even
+to the same switch**. Passive LLDP capture (`tcpdump -i pN -e 'ether proto 0x88cc'`) shows a different
+neighbour on each port:
 
 ```
 p0:  b0:cf:0e:2b:fd:68  l28-compleaf-1.pod23.m3.pdx01.us.nvidia.com
@@ -538,12 +659,13 @@ $ sudo ip netns exec l2probe ping -c 4 10.77.77.1
 4 packets transmitted, 4 received, 0% packet loss
 ```
 
-So the p1 → p0 hop the tutorial depends on **does exist on testbed B**; it is just two switch hops
-across a shared lab VLAN instead of a private cable. Two consequences follow:
+So the p1 → p0 hop the tutorial depends on **exists either way**; across the fabric it is just two
+switch hops over a shared lab VLAN instead of a private cable. Three consequences follow, and they are
+why the setup script looks the way it does:
 
 - **The loopback must not rely on flooding.** `ovsbr2` would otherwise flood the receiver's MAC as
-  unknown-unicast out `p1`, which is harmless on a private DAC but on testbed B sprays every frame
-  across pod23's VLAN at 92 Gb/s. `setup_roce_loopback.sh` pins both directions with explicit
+  unknown-unicast out `p1`, which is harmless on a private DAC but on a shared fabric sprays every
+  frame across the lab VLAN at 92 Gb/s. `setup_roce_loopback.sh` pins both directions with explicit
   OpenFlow rules so the fabric unicasts p1 → leaf-2 → leaf-1 → p0; see
   [Why `ovsbr2` gets two explicit flows](#scalable-functions-sfs--the-roce-endpoints).
 - **SF MACs must be unique per DPU**, since they are visible to the whole VLAN — hence deriving
@@ -552,55 +674,9 @@ across a shared lab VLAN instead of a private cable. Two consequences follow:
   with `RTNETLINK answers: Invalid argument` on the mlx5 switchdev uplink; use a macvlan (as above)
   if you need to probe a port from an isolated namespace.
 
-### Testbed B: building
+### Handing a borrowed card back
 
-Testbed B ships **DOCA 2.7**, and a native build fails at configure time — 2.7 does not install the
-pkg-config files `meson.build` looks for:
-
-```
-Run-time dependency doca-common found: NO (tried pkgconfig)
-meson.build:36:0: ERROR: Dependency "doca-common" not found, tried pkgconfig
-```
-
-Use the container instead, which carries DOCA 2.9 userspace regardless of what the DPU ships:
-
-```bash
-./run_container.sh
-```
-
-**DOCA 2.9 userspace drives testbed B's older OFED 24.04 kernel driver without complaint** — the
-HWS pipes build, the SF representor is found, and packets forward. That skew is the thing worth
-knowing: the container does not need a matching host DOCA version.
-
-### Testbed B: validation
-
-The full exercise was run on both boxes after `setup_roce_loopback.sh`, with `ib_write_bw`
-(`-R`, 64 KB writes, 10 s) and `doca_flow_ecn --percent 100`. CNP counters are read from the **PF**
-devices in the default namespace (`mlx5_0` = receiver/NP side, `mlx5_1` = sender/RP side) — the
-SFs' own RDMA devices have no `hw_counters` directory:
-
-|                                    | testbed A (DAC) | testbed B (fabric) |
-| ---------------------------------- | --------------- | ------------------ |
-| baseline throughput                | 92.61 Gb/s      | 92.10 Gb/s         |
-| baseline `np_cnp_sent` Δ           | 0               | 169                |
-| `--percent 100` throughput         | 92.61 Gb/s      | 92.07 Gb/s         |
-| `--percent 100` `np_cnp_sent` Δ    | 2,399,569       | 2,413,989          |
-| `--percent 100` `rp_cnp_handled` Δ | 2,399,568       | 2,413,990          |
-| packets CE-marked                  | 113,053,352     | 113,510,981        |
-
-Two switch hops cost essentially nothing: testbed B tracks testbed A's private DAC to within 0.6%,
-and the marking → CNP loop is unambiguously attributable to the DOCA Flow program (169 → 2.4 M).
-
-> Note for Part IV: testbed B handled 2.4 M CNPs with `USER_PROGRAMMABLE_CC=0` — i.e. with stock
-> DCQCN nominally in charge — and throughput still did not move (92.10 → 92.07 Gb/s). That is a
-> data point against the working explanation in the
-> [`USER_PROGRAMMABLE_CC` gotcha](#firmware-nv-config-pcc-prerequisite) above, which assumed the
-> `=1` setting was what suppressed the stock reaction. It is not conclusive: the default
-> `rpg_gd=11` is a ≈0.05% cut per CNP, which a single QP at line rate may simply absorb.
-
-### Testbed B: handing the DPU back
-
-`setup_roce_loopback.sh` destroys the staging that testbed B ships with. To put it back:
+`setup_roce_loopback.sh` destroys the staging the `bf3-nvidia-*` cards ship with. To put it back:
 
 ```bash
 sudo ./admin/local_scripts/reset_nvidia_dpu_to_original_config.sh
@@ -612,13 +688,10 @@ verifies each of those before exiting non-zero if anything is off. A **reboot al
 unconditionally** — SFs, bridges and namespaces are all runtime state — so the script only exists
 to save a reboot.
 
-Note that Part IV (PCC) needs `USER_PROGRAMMABLE_CC=1`, which testbed B does **not** have set. That
-is an NV-config change requiring a real power-cycle, so as it stands testbed B runs Parts I–III (the
-DOCA Flow exercises) but not Part IV.
-
 # Testing the setup
 
-Checking if we indeed get the 100G link between the two ports of the BlueField-3 DPU:
+Confirming that the two ports really do reach each other at line rate. Run this on the card; the
+`--eth-peer` MACs below are `bf3-ulisbon-1`'s, so substitute the p0/p1 MACs of the card you are on:
 
 ```
 $ sudo /opt/mellanox/dpdk/bin/dpdk-testpmd \
@@ -642,110 +715,92 @@ testpmd> show port stats all
 
 The build and run steps below assume:
 
-- **DOCA is installed under `/opt/mellanox/doca`.** The BSP install provides the runtime libraries,
-  the build toolchain used for the DPA (`dpacc` at `/opt/mellanox/doca/tools/dpacc`), and the
-  pristine sample/application sources at `/opt/mellanox/doca/applications` (notably
-  `/opt/mellanox/doca/applications/pcc`, the base for Part IV).
+- **DOCA is installed under `/opt/mellanox/doca`.** The BSP install provides the runtime libraries
+  and the DPA build toolchain (`dpacc` at `/opt/mellanox/doca/tools/dpacc`). Which release the card
+  runs decides which tree you build: `doca-2/` for DOCA 2.x, `doca-3/` for 3.x. Check with
+  `admin/local_scripts/print_doca_version.sh`, or `admin/fleet.py doca` across the fleet.
 - **`meson` and `ninja` are on `PATH`** (system packages). Together with `dpacc` they are the only
-  tools needed to build both parts **natively on the Arm** — no DOCA devel container is required
-  (though one is provided as an alternative — see below).
+  tools needed to build **every** exercise **natively on the Arm cores**, which is how the whole
+  tutorial was built and run. Nothing is copied out of `/opt/mellanox/doca/applications` and nothing is
+  patched at build time: all of the sources are in this repository.
+- **`libpcap-dev`** is needed by the one program that writes captures (`doca_flow_ecn_pcap`);
+  `libbsd-dev` is picked up if present. `admin/local_scripts/install_deps.sh` installs the full set
+  (`admin/fleet.py deps --install` does it fleet-wide).
 - **`perftest` (`ib_write_bw`) and `mlxconfig`/`mlxfwreset` (MFT)** are installed for driving RoCE
   traffic and for the firmware NV-config step above.
-- Hugepages are reserved (DPDK/DPA programs — the `doca-flow` programs and `doca_pcc` — need them). This is
-  done for you by [`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh)
+- Hugepages are reserved (DPDK/DPA programs — the `doca-flow` programs and the PCC controller — need
+  them). This is done for you by [`setup_roce_loopback.sh`](admin/local_scripts/setup_roce_loopback.sh)
   (`dpdk-hugepages.py --reserve 4G`); it does not persist across reboots, so re-run
   `setup_roce_loopback.sh` after every boot/power-cycle.
 
-## Optional: run the whole tutorial in a container
+# Building
 
-If you would rather not build against the DPU's own DOCA install — or want a disposable,
-reproducible environment — [`run_container.sh`](run_container.sh) builds the image described by
-the [`Dockerfile`](Dockerfile) and drops you into a shell inside it:
+Each `doca-N/` directory is a self-contained meson project that builds **every** exercise for that
+DOCA release — the Flow programs and the PCC controller together. Point meson at the one matching the
+card:
 
 ```bash
-./run_container.sh
+$ meson setup build doca-3      # or: doca-2 — whichever release the card runs
+$ ninja -C build
 ```
 
-The base is `nvcr.io/nvidia/doca/doca:2.9.1-devel` — the same DOCA release as the DPU
-(`2.9.1008`), which matters because the `doca-flow` sources here target the 2.9 Flow API and the
-Part IV DPA algo is loaded by the host's driver/firmware stack. (The `doca-3`
-tree carries this same setup ported to the DOCA 3.x releases.)
+(Equivalently `cd doca-3 && meson setup build && ninja -C build`. There is no meson project at the
+repository root.) The path-steering bonus exercise is a *separate* project nested inside — see
+[Path steering](#path-steering-bonus) below.
 
-What you get:
+## The DOCA Flow programs
 
-- The four `doca-flow` programs are **already built** at `/workspace/build/doca-flow/`, and
-  `ttyplot` at `/workspace/ttyplot/ttyplot` — both compiled at image-build time.
-- The container runs as the `ubuntu` user with **passwordless sudo**, so every script in this repo
-  (`setup_roce_loopback.sh`, `run_server.sh`, `run_client.sh`, `benchmark.sh`) works unchanged.
-- It starts `--privileged --net=host` with `/dev/infiniband`, `/dev/hugepages` and
-  `/run/openvswitch` bind-mounted, so the DPU hardware is fully reachable from inside.
-- [`docker-entrypoint.sh`](docker-entrypoint.sh) runs `setup_roce_loopback.sh` on start, so the
-  per-boot RoCE loopback is already up when the shell appears. `ns0`/`ns1` are created **inside**
-  the container's network namespace and disappear with it, so nothing leaks onto the host. Skip
-  this step with `docker run -e SKIP_ROCE_SETUP=1 ...` if you only want to build.
+`doca-N/doca-flow/` builds four binaries into `build/doca-flow/`. They share the same
+PORT_DEMUX/eSwitch-forwarding scaffold and differ in what they do to a packet before delivering it to
+the receiver's SF:
 
-The Part IV PCC build stays a **runtime** step inside the container, exactly as documented below —
-run the same commands from `Building and running DOCA PCC (Part IV)`. One difference from the DPU:
-in the container `VERSION` already sits inside `/opt/mellanox/doca/applications/`, so the tree
-copies over complete and `meson setup` needs no extra help.
+| Binary                   | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`doca_flow_solution`** | The **answer key**: CE-marks a configurable fraction of IPv4 packets from the wire, with hardware counters. `--percent N`, `[0,100]` — `100` marks everything and `0` marks nothing (both exact); anything between samples on a hardware random field, rounded to the nearest power-of-two fraction. Default `100`.                                                                                                                             |
+| **`doca_flow_template`** | The **participant exercise**: `doca_flow_solution` with three pipe-building functions hollowed out to `TODO`s. Same flags. **Generated** from the solution — see below.                                                                                                                                                                                                                                                                         |
+| **`doca_flow_ecn_pcap`** | The solution *plus* a hardware copy of the traffic to a `.pcap`, so you can see the CE bit on the wire. `--pcap <file>` (optional — omit for pure marking), `--percent N`, `--sample N`. Writing starts paused and toggles with **SPACE**, or `kill -USR1 <pid>` when there is no tty (piped, `nohup`, script-driven — the app prints its own pid at startup). Not part of the exercise; hand-maintained; the only target that links `libpcap`. |
+| **`doca_flow_nop`**      | A standalone minimal forwarder, no header-modify action at all — the performance control group. Older than the rest and not used by the exercise, which carries its own no-op root pipe. Takes `--sf-num`.                                                                                                                                                                                                                                      |
 
-# Building the DOCA Flow programs
+Per-program detail is in `doca-N/doca-flow/doca_flow_ecn_pcap.README.md` and
+`doca_flow_template.README.md`; the exercise itself is written up in
+[`guides/doca-flow.md`](guides/doca-flow.md).
 
-`doca-flow/` builds four programs, sharing the same PORT_DEMUX/eSwitch-forwarding scaffold but
-differing in what (if anything) they do to a packet before delivering it to the receiver's SF:
+> **`doca_flow_template.c` is generated — do not hand-edit it.**
+> [`admin/local_scripts/regen_templates.py`](admin/local_scripts/regen_templates.py) derives it from
+> `doca_flow_solution.c`, so `diff doca_flow_template.c doca_flow_solution.c` is exactly the three
+> functions a participant writes. Change the solution, then re-run the script; `--check` verifies the
+> two are in step.
 
-- **`doca_flow_nop`** — forwards packets untouched, no header-modify action at all. Performance
-  control group, and the base file to build a pipeline on top of.
-- **`doca_flow_mac`** — rewrites the dst MAC on every packet to the receiver's real MAC, no ECN.
-  Since the wire already carries that same MAC, this rewrite is currently an identity op and
-  runs at full line rate — all three programs currently perform identically.
-- **`doca_flow_ecn`** — sets ECN CE on a configurable fraction of IPv4 packets (`--percent`,
-  `[0, 100]`, fractional values allowed). `--percent 100` marks everything, `--percent 0` marks
-  nothing (both exact); anything in between samples via a HW random field, rounded down to the
-  nearest power-of-two fraction. Default: 100.
-- **`doca_flow_mirror`** — forwards every packet to the receiver SF unchanged **and mirrors a copy
-  to a CPU RSS queue, writing them to a `.pcap`** (`--pcap <file>`, required; `--sample N` captures
-  only ~1-in-N packets). Capture is additive — the data path and goodput are unaffected. Full docs:
-  [`doca-flow/doca_flow_mirror.README.md`](doca-flow/doca_flow_mirror.README.md).
-- **`doca_flow_ecn_pcap`** — combines `doca_flow_ecn` and `doca_flow_mirror` in **one** PF0 program:
-  CE-marks `--percent` of the traffic **and** captures a copy to a `.pcap` at the same time (so you
-  don't have to fight over PF0 with two programs). `--pcap <file>` (optional — omit for pure
-  ECN-mark mode), `--percent N`, `--sample N`; pcap writing starts paused and toggles with **SPACE**,
-  or with `kill -USR1 <pid>` when there is no tty to read a keypress from (piped, `nohup`, or driven
-  by a script — the app prints its own pid at startup).
-  Full docs: [`doca-flow/doca_flow_ecn_pcap.README.md`](doca-flow/doca_flow_ecn_pcap.README.md).
+Running (only one DOCA Flow / DPDK primary process can own PF0 at a time, so pick one):
 
-Initial setup of the build directory:
-
-```
-$ meson setup build
+```bash
+$ sudo ./build/doca-flow/doca_flow_solution  -- --percent 50
+$ sudo ./build/doca-flow/doca_flow_template  -- --percent 50
+$ sudo ./build/doca-flow/doca_flow_ecn_pcap  -- --pcap /tmp/capture.pcap --percent 50 --sample 8
+$ sudo ./build/doca-flow/doca_flow_nop
 ```
 
-Building (all three programs):
+**`-- ` before the app flags is required**: every one of these registers its EAL bring-up with
+`doca_argp_set_dpdk_program()`, and DOCA argp uses `--` to separate the DPDK EAL args from the app
+args.
 
-```
-$ cd build
-$ ninja
-```
+> **Naming, if you are cross-reading the guides.** `update_participants_repo_on_github.py` ships
+> `doca_flow_template.c` renamed to **`doca_flow_ecn.c`**, so
+> [`guides/doca-flow.md`](guides/doca-flow.md) says `doca_flow_ecn` throughout. "Template" is our word
+> for it — an artefact of how the exercise is derived here — and means nothing to a participant, who
+> simply has one program with three functions to write.
 
-Running (pick one):
+# How Parts 1 and 2 fit together
 
-```
-$ sudo ./doca-flow/doca_flow_nop
-$ sudo ./doca-flow/doca_flow_mac
-$ sudo ./doca-flow/doca_flow_ecn
-$ sudo ./doca-flow/doca_flow_mirror --pcap /tmp/capture.pcap   # + optional --sample N
-$ sudo ./doca-flow/doca_flow_ecn_pcap -- --pcap /tmp/capture.pcap --percent 50 --sample 8   # mark + capture
-```
-
-# Tutorial exercises
-
-We want to exercise both the DOCA Flow pipeline and the DOCA PCC pipeline. The exercises are designed to be run on NVIDIA BlueField-3 platforms. The exercises are organized into two main parts: DOCA Flow and DOCA PCC. The plan is to have the participants build first a DOCA Flow application that sets the ECN bits of some packets, and later build a DOCA PCC application that reacts to the ECN bits set by the DOCA Flow application.
-
-The example will be tested by running both a server and a client on the ARM cores, and see how the throughput changes when the ECN bits are set by the DOCA Flow application.
+The two parts are one closed loop. Participants first built a DOCA Flow program that sets the ECN
+bits on packets, then a DOCA PCC controller that reacts to the CNPs those marks provoke. Both run on
+the Arm cores of a single card, with a server and a client driving RoCE traffic across the two-port
+loopback, so the effect of the marking is visible as a throughput change.
 
 - Server: [run_server.sh](run_server.sh)
 - Client: [run_client.sh](run_client.sh)
+- Both, with a live throughput chart: [benchmark.sh](benchmark.sh) (needs `ttyplot` —
+  [`admin/local_scripts/setup_ttyplot.sh`](admin/local_scripts/setup_ttyplot.sh))
 
 ## End-to-end data path (both parts together)
 
@@ -772,48 +827,48 @@ by `--percent`, so `RANDOM_SAMPLE` only exists for `0 < percent < 100` and `ECN_
 all at `percent 0`. Each PF owns its own domain with its own root table; only PF0's is programmed
 here — `fdb_def_rule_en=1` leaves the kernel's default FDB rules in place for PF1.
 
-- **`doca_flow_ecn` on PF0 (`mlx5_0`)** replaces the physical switch's WRED/ECN marking that the
-  original 2×BlueField-3 PCC testbed relied on. It marks **CE on every IPv4 packet** arriving from
-  the wire (unconditional, not ECT→CE — so any RoCE generator drives the loop).
+- **The Flow program on PF0 (`mlx5_0`)** replaces the physical switch's WRED/ECN marking that the
+  original 2×BlueField-3 PCC testbed relied on. At `--percent 100` it marks **CE on every IPv4 packet**
+  arriving from the wire (unconditional, not ECT→CE — so any RoCE generator drives the loop).
 - **The receiver (`mlx5_2`) generates CNPs** in hardware when it sees CE-marked packets — standard
   RoCE behavior, no PCC instance needed on the NP side.
 - **`doca-pcc-ecn` (RP) on PF1 (`mlx5_1`)** is the reaction point: each CNP triggers a
-  multiplicative rate decrease on the sender's QP (see `doca-pcc-ecn/`).
+  multiplicative rate decrease on the sender's QP. See
+  [`doca-2/doca-pcc-ecn/README.md`](doca-2/doca-pcc-ecn/README.md) for how it works.
 
-## Building and running DOCA PCC (Part IV)
+## The PCC controller (Part 2)
 
-The PCC controller (`doca-pcc-ecn/pureecn_dcqcn.patch`) patches NVIDIA's stock `rtt_template` PCC
-application and builds **natively on the Arm** from the DOCA install (see
-[Requirements and assumptions](#requirements-and-assumptions)):
+`doca-N/doca-pcc-ecn/` is a **standalone project in this repository** — real sources under `device/`
+and `host/`, built by the same meson project as the Flow programs. There is **no copy-and-patch of
+`/opt/mellanox/doca/applications` any more**: nothing is vendored at build time and there is no patch
+to apply. `meson.build` calls `build_device_code.sh`, which invokes `dpacc` to compile `device/` into
+the DPA image; the host loader in `host/pcc_ecn_rp.c` is a ~250-line replacement for NVIDIA's
+multi-mode sample app, exposing just `-d`/`--device` and `-l`/`--log-level`.
+
+So the build is just the build from [above](#building):
 
 ```bash
-cd doca-pcc-ecn
-
-# 1. Writable copy of the (read-only) system application tree, into app/ (git-ignored).
-#    /opt ships a prebuilt build/ subdir — drop it so we configure our own from scratch.
-cp -a /opt/mellanox/doca/applications ./app
-rm -rf app/build
-
-# 2. Apply the pure-ECN controller patch (1 file, touches only algo/rtt_template.c):
-patch -p1 -d app < pureecn_dcqcn.patch
-
-# 3. Configure + build. Put dpacc on PATH so build_device_code.sh finds it; ninja invokes it to
-#    compile the DPA (device-side) algo. Patch BEFORE meson setup — the device build target does
-#    not re-trigger on algo edits, so after any algo change reconfigure from a clean build dir.
-cd app
-PATH="/opt/mellanox/doca/tools:$PATH" meson setup build -Denable_all_applications=false -Denable_pcc=true
-PATH="/opt/mellanox/doca/tools:$PATH" ninja -C build
-# => doca-pcc-ecn/app/build/pcc/doca_pcc  (host loader; the patched algo is baked into the DPA image)
+$ meson setup build doca-3 && ninja -C build
+# => build/doca-pcc-ecn/doca_pcc_ecn_rp           the finished controller (answer key)
+# => build/doca-pcc-ecn/doca_pcc_ecn_rp_template  the same with the two reactions hollowed out
 ```
 
-Requires the firmware knob (`USER_PROGRAMMABLE_CC=1`, *Current* value) to be live, or `doca_pcc`
+The `_template` variant is the participant exercise: identical to `doca_pcc_ecn_rp` except that its
+DPA algorithm is `device/algo/rtt_template_exercise.c`, a copy of `rtt_template.c` with the CNP
+multiplicative decrease (TODO 1) and the TX additive increase (TODO 2) removed. It builds and runs as
+shipped, but never moves the rate until the TODOs are filled — which is exactly what the guide's first
+stage exploits. It is generated by
+[`admin/make_pcc_exercise.py`](admin/make_pcc_exercise.py) (`--check` verifies it is in step with the
+controller); `update_participants_repo_on_github.py` ships it renamed to `rtt_template.c`.
+
+Requires the firmware knob (`USER_PROGRAMMABLE_CC=1`, *Current* value) to be live, or the controller
 refuses to start — see [Firmware NV-config](#firmware-nv-config-pcc-prerequisite).
 
 The **device mapping is converged to our single-DPU setup** as follows:
 
-| Step          | Original 2×BF3 testbed         | **Our single-DPU DAC loopback**          |
+| Step          | Original 2×BF3 testbed         | **Our single-DPU loopback**              |
 | ------------- | ------------------------------ | ---------------------------------------- |
-| ECN marking   | SONiC switch WRED on DSCP26→Q3 | `doca_flow_ecn` on PF0 (`mlx5_0`)        |
+| ECN marking   | SONiC switch WRED on DSCP26→Q3 | the Flow program on PF0 (`mlx5_0`)       |
 | RP PCC device | `mlx5_1` on the sender host    | `mlx5_1` (PF1 uplink — sender is p1/ns1) |
 | NP PCC device | `mlx5_1` on the receiver host  | none (receiver HW CNP is enough)         |
 | Sender RoCE   | `mlx5_3` on sender host        | `mlx5_3` in `ns1` (client)               |
@@ -823,10 +878,10 @@ Combined run (start Flow first, then the RP controller, then drive traffic):
 
 ```bash
 # 1. ECN marker (PF0) — leave running:
-sudo ./build/doca-flow/doca_flow_ecn
+sudo ./build/doca-flow/doca_flow_solution -- --percent 100
 
-# 2. RP PCC controller on PF1 — FOREGROUND, stays Active for the whole window:
-sudo timeout 40 stdbuf -oL ./doca-pcc-ecn/app/build/pcc/doca_pcc -d mlx5_1 -l 50 > rp.log 2>&1 &
+# 2. RP PCC controller on PF1 — stays Active for the whole window:
+sudo timeout 40 stdbuf -oL ./build/doca-pcc-ecn/doca_pcc_ecn_rp -d mlx5_1 -l 50 > rp.log 2>&1 &
 
 # 3. Drive RoCE traffic. -R (rdma_cm) is MANDATORY: the QP→algo-slot-0 binding is negotiated
 #    via RoCE ECE, which perftest only performs with -R. Without it the custom controller never
@@ -835,11 +890,37 @@ sudo timeout 40 stdbuf -oL ./doca-pcc-ecn/app/build/pcc/doca_pcc -d mlx5_1 -l 50
 sudo ip netns exec ns0 ib_write_bw -d mlx5_2 -R -x 1 -F --report_gbits --run_infinitely -D 1            # server
 sudo ip netns exec ns1 ib_write_bw -d mlx5_3 -R -x 1 -F 10.0.0.1 --report_gbits --run_infinitely -D 1   # client
 
-grep PURE_ECN rp.log            # rate walking down as CNPs arrive => the loop is live
-sudo pkill -INT -x doca_pcc     # stop gracefully (never SIGKILL: leaves a ghost DPA context)
+grep PURE_ECN rp.log                  # rate walking down as CNPs arrive => the loop is live
+sudo pkill -INT -x doca_pcc_ecn_rp    # stop gracefully (never SIGKILL: leaves a ghost DPA context)
 ```
 
-> **If no CNPs arrive** (`grep PURE_ECN rp.log` stays empty while `doca_flow_ecn` reports rising CE
+> **If no CNPs arrive** (`grep PURE_ECN rp.log` stays empty while the Flow program reports rising CE
 > counts): the receiver's HW **CNP generation** may be priority-scoped. Add a traffic class to steer
 > traffic onto an ECN-enabled priority — e.g. `--tclass=104` (DSCP 26 → TC3) on both `ib_write_bw`
-> ends — even though `doca_flow_ecn` already marks CE regardless of queue.
+> ends — even though the Flow program already marks CE regardless of queue.
+
+Design and bring-up notes live next to the sources:
+[`doca-2/doca-pcc-ecn/README.md`](doca-2/doca-pcc-ecn/README.md) (what is in the directory and how it
+is tuned), [`doca_pcc_guide.md`](doca-2/doca-pcc-ecn/doca_pcc_guide.md) (host↔DPA split, the event
+loop, how a rate reaches the NIC) and
+[`doca_pcc_findings.md`](doca-2/doca-pcc-ecn/doca_pcc_findings.md) (the operational gotchas).
+
+## Path steering (bonus)
+
+[`doca-3/pcc-path-steering/`](doca-3/pcc-path-steering/) is a **separate meson project** nested inside
+`doca-3/` — it is NVIDIA's `applications` tree with our steering module added, so it is configured on
+its own rather than by `doca-N/meson.build`:
+
+```bash
+$ cd doca-3/pcc-path-steering
+$ meson setup build && ninja -C build
+# => build/doca_pcc          PCC controller with embedded egress steering (-r <sender SF rep>)
+# => build/doca_flow_steer   the standalone ingress/egress steering datapath
+```
+
+It feeds per-QP PCC rate reports into a live DOCA Flow hash pipe to split traffic across two virtual
+paths marked by an ICRC-exempt DSCP bit. `doca-2/pcc-path-steering` is a symlink to this same tree;
+its DOCA 2.9 and 3.x differences are handled internally by `doca_flow_compat.h` and
+`pcc_doca_compat.h`. Details in [`doca-3/pcc-path-steering/README.md`](doca-3/pcc-path-steering/README.md)
+and [`steering/README.md`](doca-3/pcc-path-steering/steering/README.md); the walkthrough is
+[`guides/pcc-path-steering.md`](guides/pcc-path-steering.md).

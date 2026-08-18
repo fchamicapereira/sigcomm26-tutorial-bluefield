@@ -17,5 +17,13 @@ The four flow programs in this directory:
 | ---------------------- | ------------------------------------------------------------------------------ |
 | `doca_flow_solution.c` | ECN marking and random sampling with hardware counters. The answer key, and the file the template is derived from. |
 | `doca_flow_template.c` | The same with three function bodies hollowed out to `TODO`s — the exercise. Generated. |
-| `doca_flow_ecn_pcap.c` | The solution plus a hardware copy of the traffic to a pcap file: a shared mirror on 2.x, a flooding hash pipe on 3.x. Not part of the exercise, hand-maintained, and the only one that links libpcap. It ships to the participants' `-solutions/` directory so they can see a CE mark on the wire. |
+| `doca_flow_ecn_pcap.c` | The solution plus a hardware copy of the traffic to a pcap file: a shared mirror on 2.x, a flooding hash pipe on 3.x. Not part of the exercise, hand-maintained, and the only one that links libpcap. Fully documented in [`doca_flow_ecn_pcap.README.md`](doca_flow_ecn_pcap.README.md). |
 | `doca_flow_nop.c`      | A standalone minimal forwarder, older than the rest. The exercise no longer needs it — the template carries its own `create_root_pipe_nop()` — and it does not ship to participants. |
+
+**Only `doca_flow_template.c` ships**, renamed to `doca_flow_ecn.c` — which is why
+[`guides/doca-flow.md`](../../guides/doca-flow.md) calls it that throughout. *No solutions ship*:
+neither `doca_flow_solution.c` nor `doca_flow_ecn_pcap.c` (which contains the same three answers) is
+copied to the participant repository, and there are no `doca-N-solutions/` directories any more. See
+the docstring of
+[`admin/update_participants_repo_on_github.py`](../../admin/update_participants_repo_on_github.py) for
+exactly what crosses over.
